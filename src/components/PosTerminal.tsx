@@ -1,5 +1,6 @@
-import React, { useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import {
+  AlertTriangle,
   ArrowLeft,
   Barcode,
   CheckCircle2,
@@ -20,6 +21,7 @@ import {
   Printer,
   QrCode,
   Send,
+  Settings,
   Smartphone,
   Sparkles,
   Star,
@@ -71,6 +73,7 @@ interface PosTerminalProps {
   isOffline: boolean;
   canExitToAdmin: boolean;
   onExitToAdmin?: () => void;
+  onOpenModuleById?: (moduleId: string) => void;
   initialLocked?: boolean;
   onCompleteCheckout: (payload: {
     lines: Array<{ productId: string; qty: number; discountPct: number }>;
@@ -137,6 +140,7 @@ export const PosTerminal: React.FC<PosTerminalProps> = ({
   isOffline,
   canExitToAdmin,
   onExitToAdmin,
+  onOpenModuleById,
   initialLocked = true,
   onCompleteCheckout,
   onEmailReceipt,
@@ -188,7 +192,7 @@ export const PosTerminal: React.FC<PosTerminalProps> = ({
   );
 
   const [paymentMethod, setPaymentMethod] = useState<PaymentMethod>(
-    enabledGateways[0]?.displayName || 'M-Pesa STK (Daraja)'
+    enabledGateways[0]?.displayName || ''
   );
   const [tenderedInput, setTenderedInput] = useState<string>('');
   const [stkPromptState, setStkPromptState] = useState<'idle' | 'sending' | 'confirmed'>('idle');
@@ -209,8 +213,60 @@ export const PosTerminal: React.FC<PosTerminalProps> = ({
   const [pinError, setPinError] = useState('');
   const [clockFeedback, setClockFeedback] = useState('');
 
+  // Reset register context when switching businesses or branches
+  useEffect(() => {
+    setCart([]);
+    setSelectedOfferId('');
+    setTipInput('0');
+    setSelectedTableSlot(null);
+    setCompletedReceipt(null);
+    setErrorMsg('');
+    setCategory('All');
+    setSubCategory('All');
+    setActiveSectionId('All');
+    setSpatialView(layoutConfig?.layoutMode === 'restaurant_tables' ? 'tables' : 'shelves');
+    setActiveFloorId(floorZones[0]?.id || '');
+  }, [business.id, store.id, layoutConfig?.layoutMode, floorZones]);
+
+  // Keep paymentMethod strictly synced with enabledGateways
+  useEffect(() => {
+    if (enabledGateways.length === 0) {
+      setPaymentMethod('');
+    } else if (!enabledGateways.some((g) => g.displayName === paymentMethod)) {
+      setPaymentMethod(enabledGateways[0].displayName);
+      setStkPromptState('idle');
+      setStkRef('');
+    }
+  }, [enabledGateways, paymentMethod]);
+
   const perms = activeEmployee?.permissions || ROLE_PERMISSIONS[activeRole];
   const selectedGatewayObj = enabledGateways.find((g) => g.displayName === paymentMethod);
+
+  // Setup readiness check: gate POS checkout if branch inactive, 0 enabled gateways, or 0 SKUs
+  const setupGaps = useMemo(() => {
+    const gaps: Array<{ title: string; detail: string; moduleId?: string }> = [];
+    if (!store?.isActive) {
+      gaps.push({
+        title: 'Store Branch Inactive',
+        detail: `${store?.name || 'Selected branch'} is currently marked inactive.`,
+      });
+    }
+    if (enabledGateways.length === 0) {
+      gaps.push({
+        title: 'No Payment Gateways Enabled',
+        detail: 'Enable at least one payment tender (Cash Drawer, M-Pesa Daraja, Airtel Money, or Card) before taking POS checkouts.',
+        moduleId: 'payment_gateways',
+      });
+    }
+    if (products.length === 0) {
+      gaps.push({
+        title: 'No Inventory Products Found',
+        detail: 'Add at least one SKU to your Inventory catalog before opening POS checkout.',
+        moduleId: 'inventory',
+      });
+    }
+    return gaps;
+  }, [store?.isActive, store?.name, enabledGateways.length, products.length]);
 
   // Two-level Categories & Subcategories
   const categories = useMemo(() => {
@@ -257,10 +313,19 @@ export const PosTerminal: React.FC<PosTerminalProps> = ({
   }, [products, category, subCategory, spatialView, activeSectionId, search]);
 
   const addProductToCart = (product: ProductItem) => {
+    const avail = product.stockByStore[store.id] ?? 0;
+    if (avail <= 0) {
+      setErrorMsg(`"${product.name}" is out of stock in ${store.name}.`);
+      return;
+    }
     setErrorMsg('');
     setCart((prev) => {
       const existing = prev.find((l) => l.product.id === product.id);
       if (existing) {
+        if (existing.qty >= avail) {
+          setErrorMsg(`Only ${avail} ${product.unit} available in ${store.name} for "${product.name}".`);
+          return prev;
+        }
         return prev.map((l) =>
           l.product.id === product.id ? { ...l, qty: l.qty + 1 } : l
         );
@@ -279,7 +344,6 @@ export const PosTerminal: React.FC<PosTerminalProps> = ({
     if (match) {
       addProductToCart(match);
       setBarcodeInput('');
-      setErrorMsg('');
     } else {
       setErrorMsg(`No SKU or barcode matched "${barcodeInput}".`);
     }
@@ -288,7 +352,17 @@ export const PosTerminal: React.FC<PosTerminalProps> = ({
   const updateQty = (productId: string, delta: number) => {
     setCart((prev) =>
       prev
-        .map((l) => (l.product.id === productId ? { ...l, qty: l.qty + delta } : l))
+        .map((l) => {
+          if (l.product.id !== productId) return l;
+          const avail = l.product.stockByStore[store.id] ?? 0;
+          const next = l.qty + delta;
+          if (delta > 0 && next > avail) {
+            setErrorMsg(`Only ${avail} ${l.product.unit} available in ${store.name} for "${l.product.name}".`);
+            return l;
+          }
+          setErrorMsg('');
+          return { ...l, qty: next };
+        })
         .filter((l) => l.qty > 0)
     );
   };
@@ -803,7 +877,60 @@ export const PosTerminal: React.FC<PosTerminalProps> = ({
         </div>
       </div>
 
-      {/* Main POS Counter Workspace */}
+      {/* POS Setup Gate: Block unconfigured checkouts */}
+      {setupGaps.length > 0 ? (
+        <div className="mx-auto max-w-xl px-4 py-12">
+          <div className="rounded-2xl border border-amber-300 bg-white p-6 shadow-sm dark:border-amber-800 dark:bg-slate-900">
+            <div className="flex items-center gap-2.5 text-amber-700 dark:text-amber-400">
+              <AlertTriangle className="h-5 w-5" />
+              <h2 className="font-display text-lg font-bold">
+                POS Setup Required for {business.name}
+              </h2>
+            </div>
+            <p className="mt-1.5 text-xs text-slate-600 dark:text-slate-300">
+              This register cannot process checkouts until the required branch configurations are completed:
+            </p>
+            <div className="mt-4 space-y-2.5">
+              {setupGaps.map((gap) => (
+                <div
+                  key={gap.title}
+                  className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-slate-200 bg-slate-50 p-3 dark:border-slate-700 dark:bg-slate-800"
+                >
+                  <div>
+                    <p className="text-xs font-bold text-slate-900 dark:text-slate-100">
+                      {gap.title}
+                    </p>
+                    <p className="mt-0.5 text-[11px] text-slate-500 dark:text-slate-400">
+                      {gap.detail}
+                    </p>
+                  </div>
+                  {gap.moduleId && canExitToAdmin && onOpenModuleById && (
+                    <button
+                      type="button"
+                      onClick={() => onOpenModuleById(gap.moduleId!)}
+                      className="inline-flex items-center gap-1 rounded-lg bg-teal-700 px-3 py-1.5 text-xs font-semibold text-white hover:bg-teal-800"
+                    >
+                      <Settings className="h-3.5 w-3.5" />
+                      <span>Configure</span>
+                    </button>
+                  )}
+                </div>
+              ))}
+            </div>
+            {canExitToAdmin && onExitToAdmin && (
+              <button
+                type="button"
+                onClick={onExitToAdmin}
+                className="mt-5 inline-flex items-center gap-1.5 rounded-lg border border-slate-200 px-4 py-2 text-xs font-semibold text-slate-700 hover:bg-slate-50 dark:border-slate-700 dark:text-slate-200"
+              >
+                <ArrowLeft className="h-3.5 w-3.5" />
+                <span>Return to Back Office</span>
+              </button>
+            )}
+          </div>
+        </div>
+      ) : (
+      /* Main POS Counter Workspace */
       <div className="mx-auto grid max-w-[1440px] grid-cols-1 gap-5 px-4 py-5 sm:px-6 lg:grid-cols-12">
         {/* Left: Spatial Layout + 2-Tier Taxonomy + Product Grid */}
         <div className="space-y-4 lg:col-span-7">
@@ -1093,7 +1220,8 @@ export const PosTerminal: React.FC<PosTerminalProps> = ({
           >
             {filteredProducts.map((product) => {
               const stockQty = product.stockByStore[store.id] ?? 0;
-              const lowStock = stockQty <= product.reorderPoint;
+              const outOfStock = stockQty <= 0;
+              const lowStock = stockQty > 0 && stockQty <= product.reorderPoint;
               const matchingOffer = activeOffers.find(
                 (o) => o.targetCategory === product.category
               );
@@ -1101,8 +1229,13 @@ export const PosTerminal: React.FC<PosTerminalProps> = ({
                 <button
                   key={product.id}
                   type="button"
+                  disabled={outOfStock}
                   onClick={() => addProductToCart(product)}
-                  className="group flex flex-col overflow-hidden rounded-xl border border-slate-200 bg-white text-left transition-all hover:border-teal-600/60 hover:shadow-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-600 dark:border-slate-800 dark:bg-slate-900"
+                  className={`group flex flex-col overflow-hidden rounded-xl border text-left transition-all focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-600 ${
+                    outOfStock
+                      ? 'cursor-not-allowed border-slate-200 bg-slate-50 opacity-60 dark:border-slate-800 dark:bg-slate-900/50'
+                      : 'border-slate-200 bg-white hover:border-teal-600/60 hover:shadow-sm dark:border-slate-800 dark:bg-slate-900'
+                  }`}
                 >
                   {business.posConfig.gridDensity === 'comfortable' && (
                     <div className="relative h-28 w-full overflow-hidden bg-slate-100 dark:bg-slate-800">
@@ -1156,12 +1289,14 @@ export const PosTerminal: React.FC<PosTerminalProps> = ({
                       </span>
                       <span
                         className={`font-mono text-[11px] tabular-nums ${
-                          lowStock
-                            ? 'font-semibold text-amber-700 dark:text-amber-400'
-                            : 'text-slate-500 dark:text-slate-400'
+                          outOfStock
+                            ? 'font-bold text-rose-600 dark:text-rose-400'
+                            : lowStock
+                              ? 'font-semibold text-amber-700 dark:text-amber-400'
+                              : 'text-slate-500 dark:text-slate-400'
                         }`}
                       >
-                        {stockQty} {product.unit}
+                        {outOfStock ? 'Out of Stock' : `${stockQty} ${product.unit}`}
                       </span>
                     </div>
                   </div>
@@ -1543,7 +1678,7 @@ export const PosTerminal: React.FC<PosTerminalProps> = ({
             <button
               type="button"
               onClick={handleCheckout}
-              disabled={cart.length === 0 || isSubmitting}
+              disabled={cart.length === 0 || isSubmitting || !paymentMethod}
               className="w-full rounded-lg bg-teal-700 py-3 text-sm font-semibold text-white transition-colors hover:bg-teal-800 disabled:opacity-50 dark:bg-teal-600 dark:hover:bg-teal-500"
             >
               {isSubmitting
@@ -1555,6 +1690,7 @@ export const PosTerminal: React.FC<PosTerminalProps> = ({
           </div>
         </div>
       </div>
+      )}
 
       {/* Printable 80mm / A4 Receipt + Customer Star Rating + Email Dispatch Modal */}
       {completedReceipt && (

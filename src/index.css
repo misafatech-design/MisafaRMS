@@ -38,7 +38,9 @@
     visibility: hidden;
   }
   #misafa-printable-receipt,
-  #misafa-printable-receipt * {
+  #misafa-printable-receipt *,
+  #misafa-printable-document,
+  #misafa-printable-document * {
     visibility: visible;
   }
   #misafa-printable-receipt {
@@ -50,5 +52,21 @@
     background: #fff !important;
     color: #000 !important;
     border: none !important;
+    box-shadow: none !important;
+  }
+  #misafa-printable-document {
+    position: absolute;
+    left: 0;
+    top: 0;
+    width: 100%;
+    max-width: 210mm;
+    padding: 16mm 14mm;
+    background: #fff !important;
+    color: #000 !important;
+    border: none !important;
+    box-shadow: none !important;
+  }
+  .no-print {
+    display: none !important;
   }
 }

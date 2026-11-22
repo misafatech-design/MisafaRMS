@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { CheckCircle2, Plus, Smartphone, Trash2, WalletCards } from 'lucide-react';
 import { BusinessEntity, PaymentGatewayConfig } from '../types/erp';
 
@@ -18,6 +18,10 @@ export const PaymentGatewaysView: React.FC<PaymentGatewaysViewProps> = ({
   const [customPrefix, setCustomPrefix] = useState('');
   const [saving, setSaving] = useState(false);
   const [savedBanner, setSavedBanner] = useState('');
+
+  useEffect(() => {
+    setGateways(business.paymentGateways);
+  }, [business.id, business.paymentGateways]);
 
   const handleToggle = async (id: string) => {
     const next = gateways.map((g) => (g.id === id ? { ...g, enabled: !g.enabled } : g));

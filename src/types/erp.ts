@@ -240,6 +240,15 @@ export interface BusinessEntity {
   monthlyFee?: number;
   branchLimit?: number;
   subscriptionRenewsAt?: string;
+  // eCommerce & Domain Configuration
+  ecommerceEnabled?: boolean;
+  customDomain?: string;
+  domainVerified?: boolean;
+  dnsToken?: string;
+  storefrontTagline?: string;
+  deliveryFee?: number;
+  freeDeliveryAbove?: number;
+  storefrontPickupEnabled?: boolean;
   installedModuleIds: string[];
   posConfig: PosCustomizationConfig;
   paymentGateways: PaymentGatewayConfig[];
@@ -367,6 +376,153 @@ export interface AuditLogEntry {
   recipientEmail?: string;
 }
 
+export type OnlineOrderFulfillmentStatus =
+  | 'Pending'
+  | 'Confirmed & Packed'
+  | 'Dispatched'
+  | 'Delivered'
+  | 'Cancelled';
+
+export interface OnlineOrderLine {
+  productId: string;
+  sku: string;
+  name: string;
+  qty: number;
+  unitPrice: number;
+  taxCode: TaxCode;
+  lineTotal: number;
+}
+
+export interface OnlineOrder {
+  id: string;
+  orderNo: string;
+  businessId: string;
+  storeId: string;
+  storeName: string;
+  customerName: string;
+  customerPhone: string;
+  customerEmail?: string;
+  customerPin?: string;
+  deliveryMethod: 'delivery' | 'pickup';
+  deliveryAddress: string;
+  fulfillmentStatus: OnlineOrderFulfillmentStatus;
+  paymentMethod: string;
+  paymentRef: string;
+  paymentStatus: 'Paid' | 'Pending COD' | 'Refunded';
+  currency: string;
+  subtotal: number;
+  taxAmount: number;
+  deliveryFee: number;
+  total: number;
+  lines: OnlineOrderLine[];
+  linkedTransactionId?: string;
+  linkedInvoiceId?: string;
+  etimsCuin?: string;
+  notes?: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface TaxInvoiceRecord {
+  id: string;
+  invoiceNo: string;
+  businessId: string;
+  storeId: string;
+  storeName: string;
+  customerName: string;
+  customerEmail?: string;
+  customerPhone?: string;
+  customerPin?: string;
+  docType: 'Tax Invoice' | 'Proforma Quote';
+  status: 'Draft' | 'Unpaid' | 'Partial' | 'Paid' | 'Void';
+  currency: string;
+  lines: Array<{
+    productId?: string;
+    sku: string;
+    name: string;
+    qty: number;
+    unitPrice: number;
+    taxCode: TaxCode;
+    lineTotal: number;
+  }>;
+  subtotal: number;
+  taxAmount: number;
+  total: number;
+  amountPaid: number;
+  balanceDue: number;
+  dueDate: string;
+  etimsCuin?: string;
+  linkedTransactionId?: string;
+  createdAt: string;
+  paidAt?: string;
+}
+
+export interface CrmCustomerLead {
+  id: string;
+  businessId: string;
+  name: string;
+  company?: string;
+  email?: string;
+  phone?: string;
+  kraPin?: string;
+  stage: 'Lead' | 'Qualified' | 'Proposal' | 'Won' | 'Customer';
+  expectedValue: number;
+  notes?: string;
+  source: 'POS' | 'Online Store' | 'Manual' | 'B2B Referral';
+  createdAt: string;
+}
+
+export interface PayrollRunPayslip {
+  employeeId: string;
+  employeeName: string;
+  role: UserRole;
+  grossSalary: number;
+  nssf: number;
+  shif: number;
+  housingLevy: number;
+  taxablePay: number;
+  paye: number;
+  totalDeductions: number;
+  netPay: number;
+}
+
+export interface PayrollRunRecord {
+  id: string;
+  businessId: string;
+  periodLabel: string;
+  employeeCount: number;
+  currency: string;
+  totalGross: number;
+  totalPaye: number;
+  totalShif: number;
+  totalNssf: number;
+  totalHousingLevy: number;
+  totalNet: number;
+  totalEmployerCost: number;
+  status: 'Posted' | 'Paid';
+  payslips: PayrollRunPayslip[];
+  createdAt: string;
+}
+
+export interface BackupSnapshot {
+  id: string;
+  businessId?: string;
+  scope: 'business' | 'platform';
+  label: string;
+  createdBy: string;
+  createdAt: string;
+  sizeBytes: number;
+  counts: {
+    stores: number;
+    employees: number;
+    products: number;
+    transactions: number;
+    invoices: number;
+    onlineOrders: number;
+  };
+  payload: Record<string, unknown>;
+}
+
 export interface ErpRecord {
   id: string;
   ownerId?: string;
@@ -404,6 +560,12 @@ export interface AppModuleMeta {
     | 'pos'
     | 'pos_admin'
     | 'etims'
+    | 'invoicing'
+    | 'crm'
+    | 'accounting'
+    | 'ecommerce'
+    | 'online_orders'
+    | 'backups'
     | 'analytics'
     | 'studio'
     | 'field'

@@ -52,10 +52,98 @@
         "monthlyFee": { "type": "number" },
         "branchLimit": { "type": "number" },
         "subscriptionRenewsAt": { "type": "string", "maxLength": 40 },
+        "ecommerceEnabled": { "type": "boolean" },
+        "customDomain": { "type": "string", "maxLength": 120 },
+        "domainVerified": { "type": "boolean" },
+        "dnsToken": { "type": "string", "maxLength": 80 },
+        "storefrontTagline": { "type": "string", "maxLength": 200 },
+        "deliveryFee": { "type": "number" },
+        "freeDeliveryAbove": { "type": "number" },
+        "storefrontPickupEnabled": { "type": "boolean" },
         "createdAt": { "type": "string", "format": "date-time" },
         "updatedAt": { "type": "string", "format": "date-time" }
       },
       "required": ["id", "ownerId", "slug", "name", "country", "currency", "taxPin", "createdAt"]
+    },
+    "StoreBranch": {
+      "title": "StoreBranch",
+      "description": "Physical retail or restaurant branch under a business",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "ownerId": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "businessId": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "name": { "type": "string", "minLength": 1, "maxLength": 100 },
+        "code": { "type": "string", "minLength": 1, "maxLength": 20 },
+        "isActive": { "type": "boolean" }
+      },
+      "required": ["id", "ownerId", "businessId", "name", "code"]
+    },
+    "TaxInvoiceRecord": {
+      "title": "TaxInvoiceRecord",
+      "description": "B2B Tax Invoice or Proforma Quote",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "ownerId": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "invoiceNo": { "type": "string", "minLength": 1, "maxLength": 60 },
+        "status": { "type": "string", "enum": ["Draft", "Unpaid", "Partial", "Paid", "Void"] },
+        "total": { "type": "number" },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["id", "ownerId", "invoiceNo", "status", "total", "createdAt"]
+    },
+    "OnlineOrder": {
+      "title": "OnlineOrder",
+      "description": "eCommerce customer order synced to inventory, invoicing, and sales",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "ownerId": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "orderNo": { "type": "string", "minLength": 1, "maxLength": 60 },
+        "fulfillmentStatus": { "type": "string", "enum": ["Pending", "Confirmed & Packed", "Dispatched", "Delivered", "Cancelled"] },
+        "total": { "type": "number" },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["id", "ownerId", "orderNo", "fulfillmentStatus", "total", "createdAt"]
+    },
+    "CrmCustomerLead": {
+      "title": "CrmCustomerLead",
+      "description": "CRM sales lead or customer pipeline record",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "ownerId": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "name": { "type": "string", "minLength": 1, "maxLength": 100 },
+        "stage": { "type": "string", "enum": ["Lead", "Qualified", "Proposal", "Won", "Customer"] },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["id", "ownerId", "name", "stage", "createdAt"]
+    },
+    "PayrollRunRecord": {
+      "title": "PayrollRunRecord",
+      "description": "Kenya statutory monthly payroll run record",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "ownerId": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "periodLabel": { "type": "string", "minLength": 1, "maxLength": 60 },
+        "totalNet": { "type": "number" },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["id", "ownerId", "periodLabel", "totalNet", "createdAt"]
+    },
+    "BackupSnapshot": {
+      "title": "BackupSnapshot",
+      "description": "Business data backup snapshot",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "ownerId": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "label": { "type": "string", "minLength": 1, "maxLength": 120 },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["id", "ownerId", "label", "createdAt"]
     },
     "PlatformUserRecord": {
       "title": "PlatformUserRecord",
@@ -206,6 +294,10 @@
       "schema": { "$ref": "#/entities/BusinessEntity" },
       "description": "Multi-tenant business workspace root"
     },
+    "/businesses/{businessId}/stores/{storeId}": {
+      "schema": { "$ref": "#/entities/StoreBranch" },
+      "description": "Business retail and warehouse branches"
+    },
     "/businesses/{businessId}/employees/{employeeId}": {
       "schema": { "$ref": "#/entities/EmployeeRecord" },
       "description": "Business employees and POS PIN credentials"
@@ -217,6 +309,26 @@
     "/businesses/{businessId}/transactions/{txId}": {
       "schema": { "$ref": "#/entities/SaleTransaction" },
       "description": "Fiscal POS and eTIMS transactions"
+    },
+    "/businesses/{businessId}/invoices/{invoiceId}": {
+      "schema": { "$ref": "#/entities/TaxInvoiceRecord" },
+      "description": "B2B Tax Invoices and Proforma Quotes"
+    },
+    "/businesses/{businessId}/onlineOrders/{orderId}": {
+      "schema": { "$ref": "#/entities/OnlineOrder" },
+      "description": "eCommerce customer orders synced with inventory and sales"
+    },
+    "/businesses/{businessId}/crmLeads/{leadId}": {
+      "schema": { "$ref": "#/entities/CrmCustomerLead" },
+      "description": "CRM sales leads and customer pipeline"
+    },
+    "/businesses/{businessId}/payrollRuns/{runId}": {
+      "schema": { "$ref": "#/entities/PayrollRunRecord" },
+      "description": "Monthly Kenya statutory payroll runs"
+    },
+    "/businesses/{businessId}/backups/{backupId}": {
+      "schema": { "$ref": "#/entities/BackupSnapshot" },
+      "description": "Business backup snapshots"
     },
     "/businesses/{businessId}/erpRecords/{recordId}": {
       "schema": { "$ref": "#/entities/ErpRecord" },

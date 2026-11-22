@@ -32,6 +32,9 @@ interface OnboardingWizardModalProps {
     branchLocation: string;
     ownerName: string;
     ownerEmail: string;
+    ownerPin?: string;
+    setupMode?: 'clean' | 'starter';
+    ecommerceEnabled?: boolean;
   }) => Promise<void>;
 }
 
@@ -97,6 +100,9 @@ export const OnboardingWizardModal: React.FC<OnboardingWizardModalProps> = ({
   const [paybillOrTill, setPaybillOrTill] = useState('Till 774102');
   const [ownerName, setOwnerName] = useState('Joseph Mwangi');
   const [ownerEmail, setOwnerEmail] = useState('owner@enterprise.co.ke');
+  const [ownerPin, setOwnerPin] = useState('1234');
+  const [setupMode, setSetupMode] = useState<'clean' | 'starter'>('clean');
+  const [ecommerceEnabled, setEcommerceEnabled] = useState(true);
   const [subscriptionPlan, setSubscriptionPlan] = useState<SubscriptionPlanId>('Trial');
   const [submitting, setSubmitting] = useState(false);
   const [submitError, setSubmitError] = useState('');
@@ -234,6 +240,9 @@ export const OnboardingWizardModal: React.FC<OnboardingWizardModalProps> = ({
         branchLocation: branchLocation.trim() || 'CBD',
         ownerName: ownerName.trim(),
         ownerEmail: ownerEmail.trim(),
+        ownerPin: ownerPin.replace(/[^0-9]/g, '') || '1234',
+        setupMode,
+        ecommerceEnabled,
       });
       setName('');
       setSlug('');
@@ -527,7 +536,7 @@ export const OnboardingWizardModal: React.FC<OnboardingWizardModalProps> = ({
                 </div>
               </div>
 
-              <div className="grid grid-cols-2 gap-3">
+              <div className="grid grid-cols-3 gap-3">
                 <div>
                   <label className="block text-xs font-medium text-slate-700 dark:text-slate-300">
                     Owner / Admin Name
@@ -550,6 +559,59 @@ export const OnboardingWizardModal: React.FC<OnboardingWizardModalProps> = ({
                     className="mt-1 w-full rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-900 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-100"
                   />
                 </div>
+                <div>
+                  <label className="block text-xs font-medium text-slate-700 dark:text-slate-300">
+                    Owner POS PIN
+                  </label>
+                  <input
+                    type="text"
+                    maxLength={8}
+                    value={ownerPin}
+                    onChange={(e) => setOwnerPin(e.target.value.replace(/[^0-9]/g, ''))}
+                    className="mt-1 w-full rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 font-mono text-xs text-slate-900 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-100"
+                  />
+                </div>
+              </div>
+
+              <div className="space-y-2 rounded-lg border border-slate-200 bg-slate-50 p-3 dark:border-slate-800 dark:bg-slate-800/40">
+                <p className="text-xs font-semibold text-slate-800 dark:text-slate-200">
+                  Workspace Data Mode &amp; Online Storefront
+                </p>
+                <div className="grid grid-cols-2 gap-2">
+                  <button
+                    type="button"
+                    onClick={() => setSetupMode('clean')}
+                    className={`rounded-lg border p-2 text-left text-[11px] ${
+                      setupMode === 'clean'
+                        ? 'border-teal-600 bg-white text-slate-900 dark:bg-slate-900 dark:text-slate-100'
+                        : 'border-slate-200 text-slate-500 dark:border-slate-700'
+                    }`}
+                  >
+                    <p className="font-bold">Clean Real Workspace</p>
+                    <p className="mt-0.5 text-[10px]">Zero fake products, zero dummy staff, configure your own gateways.</p>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setSetupMode('starter')}
+                    className={`rounded-lg border p-2 text-left text-[11px] ${
+                      setupMode === 'starter'
+                        ? 'border-teal-600 bg-white text-slate-900 dark:bg-slate-900 dark:text-slate-100'
+                        : 'border-slate-200 text-slate-500 dark:border-slate-700'
+                    }`}
+                  >
+                    <p className="font-bold">Starter Sample Template</p>
+                    <p className="mt-0.5 text-[10px]">Includes sample SKU, shelf zones, and active payment defaults.</p>
+                  </button>
+                </div>
+                <label className="inline-flex items-center gap-2 pt-1 text-xs text-slate-700 dark:text-slate-300">
+                  <input
+                    type="checkbox"
+                    checked={ecommerceEnabled}
+                    onChange={(e) => setEcommerceEnabled(e.target.checked)}
+                    className="rounded border-slate-300 text-teal-700"
+                  />
+                  <span>Enable Online eCommerce Storefront at misafarms.com/{effectiveSlug || 'shop'}/shop</span>
+                </label>
               </div>
             </div>
           )}
@@ -577,8 +639,8 @@ export const OnboardingWizardModal: React.FC<OnboardingWizardModalProps> = ({
                     {selectedPlanObj.name} ({selectedPlanObj.monthlyPriceKes === 0 ? '14d Free' : `KES ${selectedPlanObj.monthlyPriceKes.toLocaleString()}/mo`})
                   </strong>
                 </div>
-                <div>Payment Gateway: <strong>{paybillOrTill}</strong></div>
-                <div>Owner Alert Email: <strong>{ownerEmail}</strong></div>
+                <div>Workspace Mode: <strong>{setupMode === 'clean' ? 'Clean (No Fake Data)' : 'Starter Sample'}</strong></div>
+                <div>eCommerce: <strong>{ecommerceEnabled ? 'Enabled' : 'Disabled'}</strong></div>
               </div>
             </div>
           )}

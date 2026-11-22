@@ -79,17 +79,19 @@ export function getTaxLabel(code: TaxCode, vatRate = 16): string {
 }
 
 /**
- * Kenya Statutory Payroll Calculation (2025/2026 rates):
- * - NSSF Tier I & II: 6% up to KES 36,000 cap (max KES 2,160 employee, matched by employer)
- * - SHIF (Social Health Insurance Fund): 2.75% of gross salary
- * - Affordable Housing Levy (AHL): 1.5% of gross salary
- * - PAYE bands on taxable pay (Gross - NSSF) minus Personal Relief KES 2,400
+ * Kenya Statutory Payroll Calculation (Tax Laws Amendment Act 2024 / 2025-2026):
+ * - NSSF Tier I & II: 6% of gross up to KES 72,000 cap (max KES 4,320 employee, matched by employer)
+ * - SHIF (Social Health Insurance Fund): 2.75% of gross salary, minimum KES 300 (tax-allowable deduction)
+ * - Affordable Housing Levy (AHL): 1.5% of gross salary (tax-allowable deduction, matched by employer)
+ * - Taxable Pay: Gross - NSSF - SHIF - Housing Levy
+ * - PAYE bands minus KES 2,400 Personal Relief
  */
 export function calculateKenyaPayroll(grossSalary: number) {
-  const nssf = Math.min(grossSalary * 0.06, 2160);
-  const shif = Math.round(grossSalary * 0.0275 * 100) / 100;
-  const housingLevy = Math.round(grossSalary * 0.015 * 100) / 100;
-  const taxablePay = Math.max(0, grossSalary - nssf);
+  const gross = Math.max(0, Math.round(grossSalary * 100) / 100);
+  const nssf = Math.round(Math.min(gross, 72000) * 0.06 * 100) / 100;
+  const shif = gross > 0 ? Math.max(300, Math.round(gross * 0.0275 * 100) / 100) : 0;
+  const housingLevy = Math.round(gross * 0.015 * 100) / 100;
+  const taxablePay = Math.max(0, Math.round((gross - nssf - shif - housingLevy) * 100) / 100);
 
   let payeBeforeRelief = 0;
   let remaining = taxablePay;
@@ -117,14 +119,13 @@ export function calculateKenyaPayroll(grossSalary: number) {
     payeBeforeRelief += remaining * 0.35;
   }
 
-  const personalRelief = 2400;
-  const insuranceRelief = shif * 0.15;
-  const paye = Math.max(0, Math.round((payeBeforeRelief - personalRelief - insuranceRelief) * 100) / 100);
-  const totalDeductions = paye + nssf + shif + housingLevy;
-  const netPay = Math.max(0, Math.round((grossSalary - totalDeductions) * 100) / 100);
+  const personalRelief = gross > 0 ? 2400 : 0;
+  const paye = Math.max(0, Math.round((payeBeforeRelief - personalRelief) * 100) / 100);
+  const totalDeductions = Math.round((paye + nssf + shif + housingLevy) * 100) / 100;
+  const netPay = Math.max(0, Math.round((gross - totalDeductions) * 100) / 100);
 
   return {
-    grossSalary,
+    grossSalary: gross,
     nssf,
     shif,
     housingLevy,
@@ -132,6 +133,9 @@ export function calculateKenyaPayroll(grossSalary: number) {
     paye,
     totalDeductions,
     netPay,
+    employerNssf: nssf,
+    employerHousingLevy: housingLevy,
+    totalEmployerCost: Math.round((gross + nssf + housingLevy) * 100) / 100,
   };
 }
 

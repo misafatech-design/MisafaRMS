@@ -1,15 +1,21 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { User } from 'firebase/auth';
 import { X } from 'lucide-react';
+import { AccountingWorkspace } from './components/AccountingWorkspace';
 import { AnalyticsDashboard } from './components/AnalyticsDashboard';
 import { AppLauncher } from './components/AppLauncher';
+import { BackupRestoreWorkspace } from './components/BackupRestoreWorkspace';
+import { CrmWorkspace } from './components/CrmWorkspace';
+import { EcommerceDomainWorkspace } from './components/EcommerceDomainWorkspace';
 import { EnterpriseGovernanceView } from './components/EnterpriseGovernanceView';
 import { ErrorBoundary } from './components/ErrorBoundary';
 import { EtimsComplianceView } from './components/EtimsComplianceView';
 import { FieldAgentView } from './components/FieldAgentView';
+import { InvoicingWorkspace } from './components/InvoicingWorkspace';
 import { LandingPage } from './components/LandingPage';
 import { ModuleWorkspace } from './components/ModuleWorkspace';
 import { OnboardingWizardModal } from './components/OnboardingWizardModal';
+import { OnlineOrdersWorkspace } from './components/OnlineOrdersWorkspace';
 import { PaymentGatewaysView } from './components/PaymentGatewaysView';
 import { PosAdminConsole } from './components/PosAdminConsole';
 import { PosTerminal } from './components/PosTerminal';
@@ -24,9 +30,14 @@ import {
   SEED_ATTENDANCE_LOGS,
   SEED_AUDIT_LOGS,
   SEED_AUTOMATIONS,
+  SEED_BACKUPS,
   SEED_BUSINESSES,
+  SEED_CRM_LEADS,
   SEED_EMPLOYEES,
   SEED_ERP_RECORDS,
+  SEED_INVOICES,
+  SEED_ONLINE_ORDERS,
+  SEED_PAYROLL_RUNS,
   SEED_PLATFORM_USERS,
   SEED_PRODUCTS,
   SEED_STORES,
@@ -38,6 +49,7 @@ import {
   auth,
   collection,
   db,
+  deleteDoc,
   doc,
   getDoc,
   getDocs,
@@ -54,14 +66,19 @@ import {
   AccountTier,
   AppModuleMeta,
   AuditLogEntry,
+  BackupSnapshot,
   BusinessEntity,
   BusinessLayoutConfig,
   CategoryGroup,
+  CrmCustomerLead,
   EmployeePermissionSet,
   EmployeeRecord,
   ErpRecord,
+  OnlineOrder,
+  OnlineOrderFulfillmentStatus,
   PaymentGatewayConfig,
   PaymentMethod,
+  PayrollRunRecord,
   PlatformBillingGateway,
   PlatformUserRecord,
   PosCustomizationConfig,
@@ -78,6 +95,7 @@ import {
   SubscriptionPlanTier,
   SubscriptionStatus,
   TaxCode,
+  TaxInvoiceRecord,
   UserRole,
   WorkflowAutomation,
 } from './types/erp';
@@ -103,15 +121,18 @@ const NON_BUSINESS_PATH_PREFIXES = new Set([
 function detectDedicatedPosEntry(): {
   isPosOnly: boolean;
   isSuperAdminPath: boolean;
+  isShopPath: boolean;
   bizSlug: string | null;
   storeId: string | null;
 } {
   if (typeof window === 'undefined') {
-    return { isPosOnly: false, isSuperAdminPath: false, bizSlug: null, storeId: null };
+    return { isPosOnly: false, isSuperAdminPath: false, isShopPath: false, bizSlug: null, storeId: null };
   }
   const params = new URLSearchParams(window.location.search);
   const pathname = window.location.pathname;
-  const firstSegment = pathname.replace(/^\/+|\/+$/g, '').split('/')[0]?.toLowerCase() || '';
+  const segments = pathname.replace(/^\/+|\/+$/g, '').split('/');
+  const firstSegment = segments[0]?.toLowerCase() || '';
+  const secondSegment = segments[1]?.toLowerCase() || '';
 
   const isPosPath = pathname === '/pos' || pathname.startsWith('/pos/');
   const isPosQuery = params.get('pos') === '1';
@@ -127,6 +148,9 @@ function detectDedicatedPosEntry(): {
   if (!isPosOnly && firstSegment && !NON_BUSINESS_PATH_PREFIXES.has(firstSegment)) {
     bizSlug = firstSegment;
   }
+  const isShopPath = Boolean(
+    !isPosOnly && firstSegment && !NON_BUSINESS_PATH_PREFIXES.has(firstSegment) && secondSegment === 'shop'
+  );
 
   if (isPosOnly && (bizSlug || storeId)) {
     try {
@@ -150,7 +174,7 @@ function detectDedicatedPosEntry(): {
     }
   }
 
-  return { isPosOnly, isSuperAdminPath, bizSlug, storeId };
+  return { isPosOnly, isSuperAdminPath, isShopPath, bizSlug, storeId };
 }
 
 interface QueuedOfflineCheckout {
@@ -216,7 +240,7 @@ function MisafaWorkspaceApp() {
   }, [initialEntry.bizSlug, initialPosShortcut]);
 
   const [showLanding, setShowLanding] = useState(
-    !initialPosShortcut && !initialEntry.isSuperAdminPath && !initialPathMatchesBiz
+    !initialPosShortcut && !initialEntry.isSuperAdminPath && !initialPathMatchesBiz && !initialEntry.isShopPath
   );
   const [posKioskMode, setPosKioskMode] = useState(initialPosShortcut);
   const [firebaseUser, setFirebaseUser] = useState<User | null>(null);
@@ -227,6 +251,11 @@ function MisafaWorkspaceApp() {
   const [employees, setEmployees] = useState<EmployeeRecord[]>(SEED_EMPLOYEES);
   const [products, setProducts] = useState<ProductItem[]>(SEED_PRODUCTS);
   const [transactions, setTransactions] = useState<SaleTransaction[]>(SEED_TRANSACTIONS);
+  const [invoices, setInvoices] = useState<TaxInvoiceRecord[]>(SEED_INVOICES);
+  const [onlineOrders, setOnlineOrders] = useState<OnlineOrder[]>(SEED_ONLINE_ORDERS);
+  const [crmLeads, setCrmLeads] = useState<CrmCustomerLead[]>(SEED_CRM_LEADS);
+  const [payrollRuns, setPayrollRuns] = useState<PayrollRunRecord[]>(SEED_PAYROLL_RUNS);
+  const [backups, setBackups] = useState<BackupSnapshot[]>(SEED_BACKUPS);
   const [studioModels, setStudioModels] = useState<StudioModel[]>(SEED_STUDIO_MODELS);
   const [automations, setAutomations] = useState<WorkflowAutomation[]>(SEED_AUTOMATIONS);
   const [auditLogs, setAuditLogs] = useState<AuditLogEntry[]>(SEED_AUDIT_LOGS);
@@ -257,7 +286,12 @@ function MisafaWorkspaceApp() {
   const [topTab, setTopTab] = useState<PrimaryWorkspaceTab>(
     initialPosShortcut ? 'pos' : initialEntry.isSuperAdminPath ? 'super_admin' : 'apps'
   );
-  const [selectedModule, setSelectedModule] = useState<AppModuleMeta | null>(null);
+  const [selectedModule, setSelectedModule] = useState<AppModuleMeta | null>(() =>
+    initialEntry.isShopPath
+      ? APP_MODULES.find((m) => m.id === 'ecommerce') || null
+      : null
+  );
+  const [crmLeadDraft, setCrmLeadDraft] = useState<CrmCustomerLead | null>(null);
 
   const [isOffline, setIsOffline] = useState<boolean>(
     typeof navigator !== 'undefined' ? !navigator.onLine : false
@@ -273,8 +307,22 @@ function MisafaWorkspaceApp() {
   const [newBranchTill, setNewBranchTill] = useState('');
   const [syncBanner, setSyncBanner] = useState('');
 
-  // Ensure Firestore user account & load owned cloud businesses upon Google Sign-In
+  // Ensure Firestore user account & hydrate all owned cloud businesses and subcollections upon Google Sign-In
   useEffect(() => {
+    const mergeById = <T extends { id: string }>(
+      prev: T[],
+      incoming: T[],
+      prependNew = false
+    ): T[] => {
+      const byId = new Map(prev.map((item) => [item.id, item]));
+      for (const item of incoming) byId.set(item.id, item);
+      if (prependNew) {
+        const incomingIds = new Set(incoming.map((x) => x.id));
+        return [...incoming, ...prev.filter((x) => !incomingIds.has(x.id))];
+      }
+      return Array.from(byId.values());
+    };
+
     const unsub = onAuthStateChanged(auth, async (user) => {
       setFirebaseUser(user);
       if (!user || !user.emailVerified) return;
@@ -288,8 +336,8 @@ function MisafaWorkspaceApp() {
           await setDoc(userRef, {
             uid: user.uid,
             displayName: user.displayName || user.email?.split('@')[0] || 'Misafa User',
-            accountType: isBootstrappedAdmin ? 'admin' : 'employee',
-            activeBusinessId,
+            accountType: isBootstrappedAdmin ? 'admin' : 'admin',
+            activeBusinessId: initialMatchedBiz.id,
             createdAt: now,
             updatedAt: now,
           });
@@ -300,12 +348,16 @@ function MisafaWorkspaceApp() {
           });
         } else {
           const data = snap.data();
-          if (data?.accountType === 'admin' || data?.accountType === 'employee' || data?.accountType === 'user') {
+          if (
+            data?.accountType === 'admin' ||
+            data?.accountType === 'employee' ||
+            data?.accountType === 'user'
+          ) {
             setAccountTier(data.accountType);
           }
         }
 
-        // Load any Firestore businesses owned by this user
+        // Load all Firestore businesses owned by this signed-in user & their subcollections
         const bizQuery = query(
           collection(db, 'businesses'),
           where('ownerId', '==', user.uid)
@@ -313,18 +365,107 @@ function MisafaWorkspaceApp() {
         const bizSnap = await getDocs(bizQuery);
         if (!bizSnap.empty) {
           const cloudBusinesses = bizSnap.docs.map((d) => d.data() as BusinessEntity);
-          setBusinesses((prev) => {
-            const byId = new Map(prev.map((b) => [b.id, b]));
-            for (const cb of cloudBusinesses) byId.set(cb.id, cb);
-            return Array.from(byId.values());
-          });
+          setBusinesses((prev) => mergeById(prev, cloudBusinesses));
+
+          let primaryCloudStoreId: string | undefined;
+          let primaryCloudEmp: EmployeeRecord | undefined;
+
+          for (const cb of cloudBusinesses) {
+            const [
+              stSnap,
+              empSnap,
+              prodSnap,
+              txSnap,
+              invSnap,
+              ordSnap,
+              leadSnap,
+              paySnap,
+              bkpSnap,
+            ] = await Promise.all([
+              getDocs(collection(db, 'businesses', cb.id, 'stores')),
+              getDocs(collection(db, 'businesses', cb.id, 'employees')),
+              getDocs(collection(db, 'businesses', cb.id, 'products')),
+              getDocs(collection(db, 'businesses', cb.id, 'transactions')),
+              getDocs(collection(db, 'businesses', cb.id, 'invoices')),
+              getDocs(collection(db, 'businesses', cb.id, 'onlineOrders')),
+              getDocs(collection(db, 'businesses', cb.id, 'crmLeads')),
+              getDocs(collection(db, 'businesses', cb.id, 'payrollRuns')),
+              getDocs(collection(db, 'businesses', cb.id, 'backups')),
+            ]);
+
+            if (!stSnap.empty) {
+              const cloudStores = stSnap.docs.map((d) => d.data() as StoreBranch);
+              setStores((prev) => mergeById(prev, cloudStores));
+              if (!primaryCloudStoreId && cb.id === cloudBusinesses[0].id) {
+                primaryCloudStoreId = cloudStores[0].id;
+              }
+            }
+            if (!empSnap.empty) {
+              const cloudEmps = empSnap.docs.map((d) => d.data() as EmployeeRecord);
+              setEmployees((prev) => mergeById(prev, cloudEmps));
+              if (!primaryCloudEmp && cb.id === cloudBusinesses[0].id) {
+                primaryCloudEmp = cloudEmps[0];
+              }
+            }
+            if (!prodSnap.empty) {
+              setProducts((prev) =>
+                mergeById(prev, prodSnap.docs.map((d) => d.data() as ProductItem))
+              );
+            }
+            if (!txSnap.empty) {
+              setTransactions((prev) =>
+                mergeById(prev, txSnap.docs.map((d) => d.data() as SaleTransaction), true)
+              );
+            }
+            if (!invSnap.empty) {
+              setInvoices((prev) =>
+                mergeById(prev, invSnap.docs.map((d) => d.data() as TaxInvoiceRecord), true)
+              );
+            }
+            if (!ordSnap.empty) {
+              setOnlineOrders((prev) =>
+                mergeById(prev, ordSnap.docs.map((d) => d.data() as OnlineOrder), true)
+              );
+            }
+            if (!leadSnap.empty) {
+              setCrmLeads((prev) =>
+                mergeById(prev, leadSnap.docs.map((d) => d.data() as CrmCustomerLead), true)
+              );
+            }
+            if (!paySnap.empty) {
+              setPayrollRuns((prev) =>
+                mergeById(prev, paySnap.docs.map((d) => d.data() as PayrollRunRecord), true)
+              );
+            }
+            if (!bkpSnap.empty) {
+              setBackups((prev) =>
+                mergeById(prev, bkpSnap.docs.map((d) => d.data() as BackupSnapshot), true)
+              );
+            }
+          }
+
+          // Focus the signed-in user's real business unless explicitly browsing Savannah demo
+          if (
+            !initialPosShortcut &&
+            !initialEntry.isSuperAdminPath &&
+            initialEntry.bizSlug !== 'misafatech'
+          ) {
+            const firstOwned = cloudBusinesses[0];
+            setActiveBusinessId((cur) => (cur === 'biz-savannah' ? firstOwned.id : cur));
+            if (primaryCloudStoreId) {
+              setActiveStoreId((cur) => (cur === 'store-nbo-01' ? primaryCloudStoreId! : cur));
+            }
+            if (primaryCloudEmp) {
+              setActiveEmployee(primaryCloudEmp);
+            }
+          }
         }
       } catch (err) {
         handleFirestoreError(err, OperationType.GET, `users/${user.uid}`);
       }
     });
     return () => unsub();
-  }, [activeBusinessId]);
+  }, [initialEntry.bizSlug, initialEntry.isSuperAdminPath, initialMatchedBiz.id, initialPosShortcut]);
 
   // Load workspace from Express backend & restore encrypted offline queue
   useEffect(() => {
@@ -338,6 +479,11 @@ function MisafaWorkspaceApp() {
           if (Array.isArray(data.employees)) setEmployees(data.employees);
           setProducts(data.products);
           setTransactions(data.transactions);
+          if (Array.isArray(data.invoices)) setInvoices(data.invoices);
+          if (Array.isArray(data.onlineOrders)) setOnlineOrders(data.onlineOrders);
+          if (Array.isArray(data.crmLeads)) setCrmLeads(data.crmLeads);
+          if (Array.isArray(data.payrollRuns)) setPayrollRuns(data.payrollRuns);
+          if (Array.isArray(data.backups)) setBackups(data.backups);
           setStudioModels(data.studioModels);
           setAutomations(data.automations);
           setAuditLogs(data.auditLogs);
@@ -365,6 +511,14 @@ function MisafaWorkspaceApp() {
                   (!initialEntry.storeId || s.id === initialEntry.storeId)
               );
               if (matchedStore) setActiveStoreId(matchedStore.id);
+              const matchedEmp = (data.employees as EmployeeRecord[] | undefined)?.find(
+                (e) => e.businessId === matchedBiz.id
+              );
+              setActiveEmployee(matchedEmp || null);
+              if (initialEntry.isShopPath) {
+                const ecomMod = APP_MODULES.find((m) => m.id === 'ecommerce');
+                if (ecomMod) setSelectedModule(ecomMod);
+              }
             }
           }
         }
@@ -383,7 +537,7 @@ function MisafaWorkspaceApp() {
     } catch {
       // Ignore storage parse failure
     }
-  }, []);
+  }, [initialEntry.bizSlug, initialEntry.isShopPath, initialEntry.storeId, initialPosShortcut]);
 
   // Initialize in-memory bearer session on role/auth switch
   useEffect(() => {
@@ -461,6 +615,41 @@ function MisafaWorkspaceApp() {
     [transactions, activeBusiness.id]
   );
 
+  const businessInvoices = useMemo(
+    () => invoices.filter((i) => i.businessId === activeBusiness.id),
+    [invoices, activeBusiness.id]
+  );
+
+  const businessOnlineOrders = useMemo(
+    () => onlineOrders.filter((o) => o.businessId === activeBusiness.id),
+    [onlineOrders, activeBusiness.id]
+  );
+
+  const businessCrmLeads = useMemo(
+    () => crmLeads.filter((l) => l.businessId === activeBusiness.id),
+    [crmLeads, activeBusiness.id]
+  );
+
+  const businessPayrollRuns = useMemo(
+    () => payrollRuns.filter((r) => r.businessId === activeBusiness.id),
+    [payrollRuns, activeBusiness.id]
+  );
+
+  const businessBackups = useMemo(
+    () => backups.filter((b) => !b.businessId || b.businessId === activeBusiness.id),
+    [backups, activeBusiness.id]
+  );
+
+  const businessErpRecords = useMemo(
+    () => erpRecords.filter((r) => r.businessId === activeBusiness.id),
+    [erpRecords, activeBusiness.id]
+  );
+
+  const businessAttendanceLogs = useMemo(
+    () => attendanceLogs.filter((l) => l.businessId === activeBusiness.id),
+    [attendanceLogs, activeBusiness.id]
+  );
+
   const handleSelectBusiness = (bizId: string) => {
     setActiveBusinessId(bizId);
     const biz = businesses.find((b) => b.id === bizId);
@@ -520,7 +709,11 @@ function MisafaWorkspaceApp() {
         const ownerId = existing.exists()
           ? (existing.data().ownerId as string)
           : firebaseUser.uid;
-        if (existing.exists() && ownerId !== firebaseUser.uid && firebaseUser.email !== 'misafatech@gmail.com') {
+        if (
+          existing.exists() &&
+          ownerId !== firebaseUser.uid &&
+          firebaseUser.email !== 'misafatech@gmail.com'
+        ) {
           return;
         }
         await setDoc(
@@ -538,6 +731,14 @@ function MisafaWorkspaceApp() {
             etimsEnabled: biz.etimsEnabled,
             etimsMode: biz.etimsMode,
             paybillOrTill: biz.paybillOrTill,
+            ecommerceEnabled: biz.ecommerceEnabled,
+            customDomain: biz.customDomain,
+            domainVerified: biz.domainVerified,
+            dnsToken: biz.dnsToken,
+            storefrontTagline: biz.storefrontTagline,
+            deliveryFee: biz.deliveryFee,
+            freeDeliveryAbove: biz.freeDeliveryAbove,
+            storefrontPickupEnabled: biz.storefrontPickupEnabled,
             installedModuleIds: biz.installedModuleIds,
             posConfig: biz.posConfig,
             paymentGateways: biz.paymentGateways,
@@ -551,6 +752,61 @@ function MisafaWorkspaceApp() {
         );
       } catch (err) {
         handleFirestoreError(err, OperationType.WRITE, `businesses/${biz.id}`);
+      }
+    },
+    [firebaseUser]
+  );
+
+  const syncSubdocToCloud = useCallback(
+    async (
+      business: BusinessEntity,
+      subcollection: string,
+      docId: string,
+      payload: Record<string, unknown>
+    ) => {
+      if (!firebaseUser || !firebaseUser.emailVerified) return;
+      if (
+        business.ownerId &&
+        business.ownerId !== firebaseUser.uid &&
+        firebaseUser.email !== 'misafatech@gmail.com'
+      ) {
+        return;
+      }
+      try {
+        await setDoc(
+          doc(db, 'businesses', business.id, subcollection, docId),
+          stripUndefined({ ...payload, ownerId: business.ownerId || firebaseUser.uid }),
+          { merge: true }
+        );
+      } catch (err) {
+        handleFirestoreError(
+          err,
+          OperationType.WRITE,
+          `businesses/${business.id}/${subcollection}/${docId}`
+        );
+      }
+    },
+    [firebaseUser]
+  );
+
+  const deleteSubdocFromCloud = useCallback(
+    async (business: BusinessEntity, subcollection: string, docId: string) => {
+      if (!firebaseUser || !firebaseUser.emailVerified) return;
+      if (
+        business.ownerId &&
+        business.ownerId !== firebaseUser.uid &&
+        firebaseUser.email !== 'misafatech@gmail.com'
+      ) {
+        return;
+      }
+      try {
+        await deleteDoc(doc(db, 'businesses', business.id, subcollection, docId));
+      } catch (err) {
+        handleFirestoreError(
+          err,
+          OperationType.DELETE,
+          `businesses/${business.id}/${subcollection}/${docId}`
+        );
       }
     },
     [firebaseUser]
@@ -1141,6 +1397,9 @@ function MisafaWorkspaceApp() {
     branchLocation: string;
     ownerName: string;
     ownerEmail: string;
+    ownerPin?: string;
+    setupMode?: 'clean' | 'starter';
+    ecommerceEnabled?: boolean;
   }) => {
     const res = await fetch('/api/businesses', {
       method: 'POST',
@@ -1158,13 +1417,20 @@ function MisafaWorkspaceApp() {
     setBusinesses((prev) => [...prev, createdBiz]);
     setStores((prev) => [...prev, data.store]);
     if (Array.isArray(data.employees)) setEmployees((prev) => [...prev, ...data.employees]);
-    setProducts((prev) => [...data.products, ...prev]);
+    if (Array.isArray(data.products) && data.products.length > 0) {
+      setProducts((prev) => [...data.products, ...prev]);
+    }
     if (data.platformUser) setPlatformUsers((prev) => [data.platformUser, ...prev]);
     if (data.subscriptionInvoice) {
       setSubscriptionInvoices((prev) => [data.subscriptionInvoice, ...prev]);
     }
     setActiveBusinessId(createdBiz.id);
     setActiveStoreId(data.store.id);
+    setAccountTier('admin');
+    setActiveRole('Owner');
+    setActiveEmployee(
+      Array.isArray(data.employees) && data.employees.length > 0 ? data.employees[0] : null
+    );
     if (!initialPosShortcut && typeof window !== 'undefined') {
       window.history.replaceState(null, '', `/${createdBiz.slug}`);
     }
@@ -1172,6 +1438,12 @@ function MisafaWorkspaceApp() {
     setTopTab('apps');
     setSelectedModule(null);
     await syncBusinessDocToCloud(createdBiz);
+    await syncSubdocToCloud(createdBiz, 'stores', data.store.id, data.store);
+    if (Array.isArray(data.employees)) {
+      for (const emp of data.employees as EmployeeRecord[]) {
+        await syncSubdocToCloud(createdBiz, 'employees', emp.id, emp as unknown as Record<string, unknown>);
+      }
+    }
   };
 
   const handleCreateEmployee = async (payload: {
@@ -1192,7 +1464,81 @@ function MisafaWorkspaceApp() {
       const data = await res.json();
       setEmployees((prev) => [...prev, data.employee]);
       if (data.platformUser) setPlatformUsers((prev) => [data.platformUser, ...prev]);
+      await syncSubdocToCloud(
+        activeBusiness,
+        'employees',
+        data.employee.id,
+        data.employee as unknown as Record<string, unknown>
+      );
     }
+  };
+
+  const handleUpdateEmployee = async (
+    employeeId: string,
+    patch: Partial<{
+      name: string;
+      email: string;
+      role: UserRole;
+      pinCode: string;
+      branchId: string;
+      grossSalary: number;
+      active: boolean;
+      permissions: EmployeePermissionSet;
+    }>
+  ) => {
+    const res = await fetch(`/api/employees/${employeeId}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(patch),
+    });
+    if (res.ok) {
+      const data = await res.json();
+      setEmployees((prev) => prev.map((e) => (e.id === employeeId ? data.employee : e)));
+      if (activeEmployee?.id === employeeId) setActiveEmployee(data.employee);
+      await syncSubdocToCloud(
+        activeBusiness,
+        'employees',
+        data.employee.id,
+        data.employee as unknown as Record<string, unknown>
+      );
+    }
+  };
+
+  const handleDeleteEmployee = async (employeeId: string) => {
+    const res = await fetch(`/api/employees/${employeeId}`, {
+      method: 'DELETE',
+    });
+    if (res.ok) {
+      setEmployees((prev) => prev.filter((e) => e.id !== employeeId));
+      setPlatformUsers((prev) => prev.filter((u) => u.id !== `usr-${employeeId}`));
+      if (activeEmployee?.id === employeeId) setActiveEmployee(null);
+      await deleteSubdocFromCloud(activeBusiness, 'employees', employeeId);
+    }
+  };
+
+  const handleRunPayroll = async (periodLabel: string): Promise<PayrollRunRecord | null> => {
+    const res = await fetch('/api/payroll/run', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ businessId: activeBusiness.id, periodLabel }),
+    });
+    const data = await res.json();
+    if (!res.ok) {
+      throw new Error(data.error || 'Payroll execution failed.');
+    }
+    if (data.payrollRun) {
+      setPayrollRuns((prev) => [data.payrollRun, ...prev]);
+      await syncSubdocToCloud(
+        activeBusiness,
+        'payrollRuns',
+        data.payrollRun.id,
+        data.payrollRun as unknown as Record<string, unknown>
+      );
+    }
+    if (data.erpRecord) {
+      setErpRecords((prev) => [data.erpRecord, ...prev]);
+    }
+    return data.payrollRun || null;
   };
 
   const handleCreateBranch = async (e: React.FormEvent) => {
@@ -1216,6 +1562,12 @@ function MisafaWorkspaceApp() {
       setNewBranchLocation('');
       setNewBranchTill('');
       setAddStoreOpen(false);
+      await syncSubdocToCloud(
+        activeBusiness,
+        'stores',
+        data.store.id,
+        data.store as unknown as Record<string, unknown>
+      );
     }
   };
 
@@ -1415,6 +1767,65 @@ function MisafaWorkspaceApp() {
     if (res.ok) {
       const data = await res.json();
       setProducts((prev) => [data.product, ...prev]);
+      await syncSubdocToCloud(
+        activeBusiness,
+        'products',
+        data.product.id,
+        data.product as unknown as Record<string, unknown>
+      );
+    }
+  };
+
+  const handleUpdateProduct = async (
+    productId: string,
+    patch: {
+      name?: string;
+      sku?: string;
+      category?: string;
+      subCategory?: string;
+      price?: number;
+      cost?: number;
+      taxCode?: TaxCode;
+      reorderPoint?: number;
+    }
+  ) => {
+    const res = await fetch(`/api/products/${productId}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(patch),
+    });
+    if (res.ok) {
+      const data = await res.json();
+      setProducts((prev) => prev.map((p) => (p.id === productId ? data.product : p)));
+      await syncSubdocToCloud(
+        activeBusiness,
+        'products',
+        data.product.id,
+        data.product as unknown as Record<string, unknown>
+      );
+    }
+  };
+
+  const handleAdjustStock = async (payload: {
+    productId: string;
+    storeId: string;
+    delta: number;
+    reason: string;
+  }) => {
+    const res = await fetch('/api/inventory/adjust', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+    if (res.ok) {
+      const data = await res.json();
+      setProducts((prev) => prev.map((p) => (p.id === data.product.id ? data.product : p)));
+      await syncSubdocToCloud(
+        activeBusiness,
+        'products',
+        data.product.id,
+        data.product as unknown as Record<string, unknown>
+      );
     }
   };
 
@@ -1436,6 +1847,325 @@ function MisafaWorkspaceApp() {
     setProducts((prev) =>
       prev.map((p) => (p.id === data.product.id ? data.product : p))
     );
+    await syncSubdocToCloud(
+      activeBusiness,
+      'products',
+      data.product.id,
+      data.product as unknown as Record<string, unknown>
+    );
+  };
+
+  const handleCreateInvoice = async (payload: {
+    storeId: string;
+    customerName: string;
+    customerEmail?: string;
+    customerPhone?: string;
+    customerPin?: string;
+    docType: 'Tax Invoice' | 'Proforma Quote';
+    dueDate: string;
+    lines: Array<{
+      productId?: string;
+      sku: string;
+      name: string;
+      qty: number;
+      unitPrice: number;
+      taxCode: TaxCode;
+    }>;
+  }): Promise<TaxInvoiceRecord | null> => {
+    const res = await fetch('/api/invoices', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ ...payload, businessId: activeBusiness.id }),
+    });
+    const data = await res.json();
+    if (!res.ok) {
+      throw new Error(data.error || 'Unable to create invoice.');
+    }
+    setInvoices((prev) => [data.invoice, ...prev]);
+    setCrmLeadDraft(null);
+    await syncSubdocToCloud(
+      activeBusiness,
+      'invoices',
+      data.invoice.id,
+      data.invoice as unknown as Record<string, unknown>
+    );
+    return data.invoice;
+  };
+
+  const handlePayInvoice = async (
+    invoiceId: string,
+    payload: { amount: number; paymentMethod: string; paymentRef: string }
+  ) => {
+    const res = await fetch(`/api/invoices/${invoiceId}/pay`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+    const data = await res.json();
+    if (!res.ok) {
+      throw new Error(data.error || 'Payment failed.');
+    }
+    if (data.invoice) {
+      setInvoices((prev) => prev.map((i) => (i.id === invoiceId ? data.invoice : i)));
+      await syncSubdocToCloud(
+        activeBusiness,
+        'invoices',
+        data.invoice.id,
+        data.invoice as unknown as Record<string, unknown>
+      );
+    }
+    if (data.transaction) {
+      setTransactions((prev) => [data.transaction, ...prev]);
+      await syncSubdocToCloud(
+        activeBusiness,
+        'transactions',
+        data.transaction.id,
+        data.transaction as unknown as Record<string, unknown>
+      );
+    }
+    if (Array.isArray(data.products)) setProducts(data.products);
+    if (data.erpRecord) setErpRecords((prev) => [data.erpRecord, ...prev]);
+  };
+
+  const handleCreateCrmLead = async (payload: {
+    name: string;
+    company?: string;
+    email?: string;
+    phone?: string;
+    kraPin?: string;
+    stage: CrmCustomerLead['stage'];
+    expectedValue: number;
+    notes?: string;
+    source: CrmCustomerLead['source'];
+  }) => {
+    const res = await fetch('/api/crm/leads', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ ...payload, businessId: activeBusiness.id }),
+    });
+    if (res.ok) {
+      const data = await res.json();
+      setCrmLeads((prev) => [data.lead, ...prev]);
+      await syncSubdocToCloud(
+        activeBusiness,
+        'crmLeads',
+        data.lead.id,
+        data.lead as unknown as Record<string, unknown>
+      );
+    }
+  };
+
+  const handleUpdateCrmLead = async (
+    leadId: string,
+    patch: { stage?: CrmCustomerLead['stage']; expectedValue?: number; notes?: string }
+  ) => {
+    const res = await fetch(`/api/crm/leads/${leadId}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(patch),
+    });
+    if (res.ok) {
+      const data = await res.json();
+      setCrmLeads((prev) => prev.map((l) => (l.id === leadId ? data.lead : l)));
+      await syncSubdocToCloud(
+        activeBusiness,
+        'crmLeads',
+        data.lead.id,
+        data.lead as unknown as Record<string, unknown>
+      );
+    }
+  };
+
+  const handleCreateJournal = async (payload: {
+    debitAccount: string;
+    creditAccount: string;
+    description: string;
+    amount: number;
+    date: string;
+  }) => {
+    const res = await fetch('/api/accounting/journal', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ ...payload, businessId: activeBusiness.id }),
+    });
+    const data = await res.json();
+    if (!res.ok) {
+      throw new Error(data.error || 'Failed to post journal entry.');
+    }
+    setErpRecords((prev) => [data.record, ...prev]);
+  };
+
+  const handleUpdateDomainConfig = async (patch: {
+    ecommerceEnabled?: boolean;
+    customDomain?: string;
+    verifyDomain?: boolean;
+    storefrontTagline?: string;
+    deliveryFee?: number;
+    freeDeliveryAbove?: number;
+    storefrontPickupEnabled?: boolean;
+  }) => {
+    const res = await fetch(`/api/businesses/${activeBusiness.id}/domain`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(patch),
+    });
+    const data = await res.json();
+    if (!res.ok) {
+      throw new Error(data.error || 'Failed to save domain settings.');
+    }
+    setBusinesses((prev) =>
+      prev.map((b) => (b.id === activeBusiness.id ? data.business : b))
+    );
+    await syncBusinessDocToCloud(data.business);
+  };
+
+  const handlePlaceOnlineOrder = async (payload: {
+    storeId: string;
+    customerName: string;
+    customerPhone: string;
+    customerEmail?: string;
+    customerPin?: string;
+    deliveryMethod: 'delivery' | 'pickup';
+    deliveryAddress: string;
+    paymentMethod: string;
+    paymentRef?: string;
+    lines: Array<{ productId: string; qty: number }>;
+  }): Promise<OnlineOrder | null> => {
+    const res = await fetch('/api/online-orders', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ ...payload, businessId: activeBusiness.id }),
+    });
+    const data = await res.json();
+    if (!res.ok) {
+      throw new Error(data.error || 'Failed to place online order.');
+    }
+    if (data.onlineOrder) {
+      setOnlineOrders((prev) => [data.onlineOrder, ...prev]);
+      await syncSubdocToCloud(
+        activeBusiness,
+        'onlineOrders',
+        data.onlineOrder.id,
+        data.onlineOrder as unknown as Record<string, unknown>
+      );
+    }
+    if (data.transaction) {
+      setTransactions((prev) => [data.transaction, ...prev]);
+      await syncSubdocToCloud(
+        activeBusiness,
+        'transactions',
+        data.transaction.id,
+        data.transaction as unknown as Record<string, unknown>
+      );
+    }
+    if (data.invoice) {
+      setInvoices((prev) => [data.invoice, ...prev]);
+      await syncSubdocToCloud(
+        activeBusiness,
+        'invoices',
+        data.invoice.id,
+        data.invoice as unknown as Record<string, unknown>
+      );
+    }
+    if (Array.isArray(data.products)) setProducts(data.products);
+    if (data.erpRecord) setErpRecords((prev) => [data.erpRecord, ...prev]);
+    return data.onlineOrder || null;
+  };
+
+  const handleUpdateOnlineOrderStatus = async (
+    orderId: string,
+    fulfillmentStatus: OnlineOrderFulfillmentStatus
+  ) => {
+    const res = await fetch(`/api/online-orders/${orderId}/status`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ fulfillmentStatus }),
+    });
+    if (res.ok) {
+      const data = await res.json();
+      if (data.onlineOrder) {
+        setOnlineOrders((prev) =>
+          prev.map((o) => (o.id === orderId ? data.onlineOrder : o))
+        );
+        await syncSubdocToCloud(
+          activeBusiness,
+          'onlineOrders',
+          data.onlineOrder.id,
+          data.onlineOrder as unknown as Record<string, unknown>
+        );
+      }
+      if (Array.isArray(data.products)) setProducts(data.products);
+      if (Array.isArray(data.invoices)) setInvoices(data.invoices);
+      if (data.creditNote) setTransactions((prev) => [data.creditNote, ...prev]);
+    }
+  };
+
+  const handleCreateBackup = async (
+    label: string,
+    scope: 'business' | 'platform'
+  ): Promise<BackupSnapshot | null> => {
+    const res = await fetch('/api/backups', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        businessId: activeBusiness.id,
+        scope,
+        label,
+        createdBy: activeEmployee?.name || 'Business Admin',
+      }),
+    });
+    const data = await res.json();
+    if (!res.ok) {
+      throw new Error(data.error || 'Backup creation failed.');
+    }
+    if (data.backup) {
+      setBackups((prev) => [data.backup, ...prev]);
+      await syncSubdocToCloud(
+        activeBusiness,
+        'backups',
+        data.backup.id,
+        data.backup as unknown as Record<string, unknown>
+      );
+    }
+    return data.backup || null;
+  };
+
+  const applyRestoreState = (data: Record<string, unknown>) => {
+    if (Array.isArray(data.businesses)) setBusinesses(data.businesses as BusinessEntity[]);
+    if (Array.isArray(data.stores)) setStores(data.stores as StoreBranch[]);
+    if (Array.isArray(data.employees)) setEmployees(data.employees as EmployeeRecord[]);
+    if (Array.isArray(data.products)) setProducts(data.products as ProductItem[]);
+    if (Array.isArray(data.transactions)) setTransactions(data.transactions as SaleTransaction[]);
+    if (Array.isArray(data.invoices)) setInvoices(data.invoices as TaxInvoiceRecord[]);
+    if (Array.isArray(data.onlineOrders)) setOnlineOrders(data.onlineOrders as OnlineOrder[]);
+    if (Array.isArray(data.crmLeads)) setCrmLeads(data.crmLeads as CrmCustomerLead[]);
+    if (Array.isArray(data.payrollRuns)) setPayrollRuns(data.payrollRuns as PayrollRunRecord[]);
+    if (Array.isArray(data.erpRecords)) setErpRecords(data.erpRecords as ErpRecord[]);
+  };
+
+  const handleRestoreBackup = async (backupId: string) => {
+    const res = await fetch(`/api/backups/${backupId}/restore`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+    });
+    const data = await res.json();
+    if (!res.ok) {
+      throw new Error(data.error || 'Restore failed.');
+    }
+    applyRestoreState(data);
+  };
+
+  const handleImportBackup = async (payload: Record<string, unknown>) => {
+    const res = await fetch('/api/backups/import', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ businessId: activeBusiness.id, payload }),
+    });
+    const data = await res.json();
+    if (!res.ok) {
+      throw new Error(data.error || 'Backup import failed.');
+    }
+    applyRestoreState(data);
   };
 
   const handleCreateStudioModel = async (payload: {
@@ -1603,6 +2333,13 @@ function MisafaWorkspaceApp() {
           setSelectedModule(null);
           setTopTab('apps');
         }}
+        onOpenModuleById={(modId) => {
+          const mod = APP_MODULES.find((m) => m.id === modId);
+          if (mod) {
+            setSelectedModule(mod);
+            setTopTab('apps');
+          }
+        }}
         initialLocked={true}
         onCompleteCheckout={handleCheckout}
         onEmailReceipt={handleEmailReceipt}
@@ -1721,7 +2458,7 @@ function MisafaWorkspaceApp() {
               activeStore={activeStore}
               transactions={businessTransactions}
               employees={businessEmployees}
-              attendanceLogs={attendanceLogs}
+              attendanceLogs={businessAttendanceLogs}
               onUpdatePosConfig={handleUpdatePosConfig}
               onUpdateLayoutConfig={handleUpdateLayoutConfig}
               onUpdateTaxonomy={handleUpdateTaxonomy}
@@ -1749,6 +2486,77 @@ function MisafaWorkspaceApp() {
               onSyncNow={handleSyncOfflineQueue}
               onSubmitFieldOrder={handleCheckout}
             />
+          ) : selectedModule.specialView === 'crm' ? (
+            <CrmWorkspace
+              business={activeBusiness}
+              transactions={businessTransactions}
+              onlineOrders={businessOnlineOrders}
+              invoices={businessInvoices}
+              crmLeads={businessCrmLeads}
+              onCreateLead={handleCreateCrmLead}
+              onUpdateLead={handleUpdateCrmLead}
+              onConvertLeadToInvoice={(lead) => {
+                setCrmLeadDraft(lead);
+                const invMod = APP_MODULES.find((m) => m.id === 'invoicing');
+                if (invMod) {
+                  setSelectedModule(invMod);
+                  setTopTab('apps');
+                }
+              }}
+            />
+          ) : selectedModule.specialView === 'invoicing' ? (
+            <InvoicingWorkspace
+              business={activeBusiness}
+              activeStore={activeStore}
+              products={businessProducts}
+              invoices={businessInvoices}
+              initialCustomer={
+                crmLeadDraft
+                  ? {
+                      name: crmLeadDraft.name,
+                      email: crmLeadDraft.email,
+                      phone: crmLeadDraft.phone,
+                      kraPin: crmLeadDraft.kraPin,
+                    }
+                  : null
+              }
+              onCreateInvoice={handleCreateInvoice}
+              onPayInvoice={handlePayInvoice}
+            />
+          ) : selectedModule.specialView === 'accounting' ? (
+            <AccountingWorkspace
+              business={activeBusiness}
+              products={businessProducts}
+              transactions={businessTransactions}
+              invoices={businessInvoices}
+              payrollRuns={businessPayrollRuns}
+              erpRecords={businessErpRecords}
+              onCreateJournal={handleCreateJournal}
+            />
+          ) : selectedModule.specialView === 'ecommerce' ? (
+            <EcommerceDomainWorkspace
+              business={activeBusiness}
+              stores={businessStores}
+              activeStore={activeStore}
+              products={businessProducts}
+              isAdmin={accountTier === 'admin'}
+              onUpdateDomainConfig={handleUpdateDomainConfig}
+              onPlaceOnlineOrder={handlePlaceOnlineOrder}
+            />
+          ) : selectedModule.specialView === 'online_orders' ? (
+            <OnlineOrdersWorkspace
+              business={activeBusiness}
+              onlineOrders={businessOnlineOrders}
+              onUpdateStatus={handleUpdateOnlineOrderStatus}
+            />
+          ) : selectedModule.specialView === 'backups' ? (
+            <BackupRestoreWorkspace
+              business={activeBusiness}
+              backups={businessBackups}
+              onCreateBackup={handleCreateBackup}
+              onRestoreBackup={handleRestoreBackup}
+              onImportBackup={handleImportBackup}
+            />
           ) : selectedModule.specialView === 'governance' ||
             selectedModule.specialView === 'api' ||
             selectedModule.specialView === 'timeline' ? (
@@ -1765,13 +2573,19 @@ function MisafaWorkspaceApp() {
               activeStore={activeStore}
               products={businessProducts}
               employees={businessEmployees}
-              attendanceLogs={attendanceLogs}
-              records={erpRecords}
+              attendanceLogs={businessAttendanceLogs}
+              payrollRuns={businessPayrollRuns}
+              records={businessErpRecords}
               accountTier={accountTier}
               activeRole={activeRole}
               onCreateProduct={handleCreateProduct}
+              onUpdateProduct={handleUpdateProduct}
+              onAdjustStock={handleAdjustStock}
               onTransferStock={handleTransferStock}
               onCreateEmployee={handleCreateEmployee}
+              onUpdateEmployee={handleUpdateEmployee}
+              onDeleteEmployee={handleDeleteEmployee}
+              onRunPayroll={handleRunPayroll}
               onEmployeeAttendance={handleEmployeeAttendance}
               onSlotStatusChange={handleSlotStatusChange}
               onReceivePurchaseOrder={handleReceivePurchaseOrder}
@@ -1783,7 +2597,7 @@ function MisafaWorkspaceApp() {
             business={activeBusiness}
             stores={businessStores}
             transactions={businessTransactions}
-            erpRecords={erpRecords}
+            erpRecords={businessErpRecords}
             onRetransmit={handleRetransmitEtims}
             onIssueCreditNote={handleIssueCreditNote}
           />

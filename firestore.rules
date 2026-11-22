@@ -71,6 +71,8 @@ service cloud.firestore {
           'id', 'ownerId', 'ownerName', 'ownerEmail', 'slug', 'name', 'country', 'currency', 'taxAuthority',
           'taxPin', 'vatRate', 'etimsEnabled', 'etimsMode', 'paybillOrTill',
           'subscriptionPlan', 'subscriptionStatus', 'monthlyFee', 'branchLimit', 'subscriptionRenewsAt',
+          'ecommerceEnabled', 'customDomain', 'domainVerified', 'dnsToken', 'storefrontTagline',
+          'deliveryFee', 'freeDeliveryAbove', 'storefrontPickupEnabled',
           'installedModuleIds', 'posConfig', 'paymentGateways', 'layoutConfig',
           'catalogTaxonomy', 'offers', 'createdAt', 'updatedAt'
         ]) &&
@@ -93,6 +95,14 @@ service cloud.firestore {
         (!('monthlyFee' in data) || (data.monthlyFee is number && data.monthlyFee >= 0)) &&
         (!('branchLimit' in data) || (data.branchLimit is number && data.branchLimit >= 1)) &&
         (!('subscriptionRenewsAt' in data) || (data.subscriptionRenewsAt is string && data.subscriptionRenewsAt.size() <= 40)) &&
+        (!('ecommerceEnabled' in data) || data.ecommerceEnabled is bool) &&
+        (!('customDomain' in data) || (data.customDomain is string && data.customDomain.size() <= 120)) &&
+        (!('domainVerified' in data) || data.domainVerified is bool) &&
+        (!('dnsToken' in data) || (data.dnsToken is string && data.dnsToken.size() <= 80)) &&
+        (!('storefrontTagline' in data) || (data.storefrontTagline is string && data.storefrontTagline.size() <= 200)) &&
+        (!('deliveryFee' in data) || (data.deliveryFee is number && data.deliveryFee >= 0)) &&
+        (!('freeDeliveryAbove' in data) || (data.freeDeliveryAbove is number && data.freeDeliveryAbove >= 0)) &&
+        (!('storefrontPickupEnabled' in data) || data.storefrontPickupEnabled is bool) &&
         (!('installedModuleIds' in data) || (data.installedModuleIds is list && data.installedModuleIds.size() <= 80 && (data.installedModuleIds.size() == 0 || data.installedModuleIds[0] is string))) &&
         (!('posConfig' in data) || data.posConfig is map) &&
         (!('paymentGateways' in data) || data.paymentGateways is list) &&
@@ -261,6 +271,99 @@ service cloud.firestore {
         (!('meta' in data) || data.meta is map);
     }
 
+    function isValidStoreBranch(data) {
+      return data.keys().hasAll(['id', 'ownerId', 'businessId', 'name', 'code']) &&
+        data.keys().hasOnly(['id', 'ownerId', 'businessId', 'name', 'code', 'location', 'etimsBhfId', 'vscuSerial', 'tillNumber', 'registerId', 'isActive']) &&
+        isValidId(data.id) &&
+        isValidId(data.ownerId) &&
+        isValidId(data.businessId) &&
+        data.name is string && data.name.size() >= 1 && data.name.size() <= 100 &&
+        data.code is string && data.code.size() >= 1 && data.code.size() <= 20 &&
+        (!('location' in data) || (data.location is string && data.location.size() <= 120)) &&
+        (!('etimsBhfId' in data) || (data.etimsBhfId is string && data.etimsBhfId.size() <= 20)) &&
+        (!('vscuSerial' in data) || (data.vscuSerial is string && data.vscuSerial.size() <= 60)) &&
+        (!('tillNumber' in data) || (data.tillNumber is string && data.tillNumber.size() <= 80)) &&
+        (!('registerId' in data) || (data.registerId is string && data.registerId.size() <= 40)) &&
+        (!('isActive' in data) || data.isActive is bool);
+    }
+
+    function isValidTaxInvoice(data) {
+      return data.keys().hasAll(['id', 'ownerId', 'invoiceNo', 'status', 'total', 'createdAt']) &&
+        data.keys().hasOnly([
+          'id', 'ownerId', 'invoiceNo', 'businessId', 'storeId', 'storeName', 'customerName',
+          'customerEmail', 'customerPhone', 'customerPin', 'docType', 'status', 'currency',
+          'lines', 'subtotal', 'taxAmount', 'total', 'amountPaid', 'balanceDue', 'dueDate',
+          'etimsCuin', 'linkedTransactionId', 'createdAt', 'paidAt'
+        ]) &&
+        isValidId(data.id) &&
+        isValidId(data.ownerId) &&
+        data.invoiceNo is string && data.invoiceNo.size() >= 1 && data.invoiceNo.size() <= 60 &&
+        data.status in ['Draft', 'Unpaid', 'Partial', 'Paid', 'Void'] &&
+        data.total is number && data.total >= 0 &&
+        data.createdAt is string && data.createdAt.size() <= 40 &&
+        (!('lines' in data) || (data.lines is list && data.lines.size() <= 200));
+    }
+
+    function isValidOnlineOrder(data) {
+      return data.keys().hasAll(['id', 'ownerId', 'orderNo', 'fulfillmentStatus', 'total', 'createdAt']) &&
+        data.keys().hasOnly([
+          'id', 'ownerId', 'orderNo', 'businessId', 'storeId', 'storeName', 'customerName',
+          'customerPhone', 'customerEmail', 'customerPin', 'deliveryMethod', 'deliveryAddress',
+          'fulfillmentStatus', 'paymentMethod', 'paymentRef', 'paymentStatus', 'currency',
+          'subtotal', 'taxAmount', 'deliveryFee', 'total', 'lines', 'linkedTransactionId',
+          'linkedInvoiceId', 'etimsCuin', 'notes', 'createdAt', 'updatedAt'
+        ]) &&
+        isValidId(data.id) &&
+        isValidId(data.ownerId) &&
+        data.orderNo is string && data.orderNo.size() >= 1 && data.orderNo.size() <= 60 &&
+        data.fulfillmentStatus in ['Pending', 'Confirmed & Packed', 'Dispatched', 'Delivered', 'Cancelled'] &&
+        data.total is number && data.total >= 0 &&
+        data.createdAt is string && data.createdAt.size() <= 40 &&
+        (!('lines' in data) || (data.lines is list && data.lines.size() <= 200));
+    }
+
+    function isValidCrmLead(data) {
+      return data.keys().hasAll(['id', 'ownerId', 'name', 'stage', 'createdAt']) &&
+        data.keys().hasOnly([
+          'id', 'ownerId', 'businessId', 'name', 'company', 'email', 'phone',
+          'kraPin', 'stage', 'expectedValue', 'notes', 'source', 'createdAt'
+        ]) &&
+        isValidId(data.id) &&
+        isValidId(data.ownerId) &&
+        data.name is string && data.name.size() >= 1 && data.name.size() <= 100 &&
+        data.stage in ['Lead', 'Qualified', 'Proposal', 'Won', 'Customer'] &&
+        data.createdAt is string && data.createdAt.size() <= 40;
+    }
+
+    function isValidPayrollRun(data) {
+      return data.keys().hasAll(['id', 'ownerId', 'periodLabel', 'totalNet', 'createdAt']) &&
+        data.keys().hasOnly([
+          'id', 'ownerId', 'businessId', 'periodLabel', 'employeeCount', 'currency',
+          'totalGross', 'totalPaye', 'totalShif', 'totalNssf', 'totalHousingLevy',
+          'totalNet', 'totalEmployerCost', 'status', 'payslips', 'createdAt'
+        ]) &&
+        isValidId(data.id) &&
+        isValidId(data.ownerId) &&
+        data.periodLabel is string && data.periodLabel.size() >= 1 && data.periodLabel.size() <= 60 &&
+        data.totalNet is number && data.totalNet >= 0 &&
+        data.createdAt is string && data.createdAt.size() <= 40 &&
+        (!('payslips' in data) || (data.payslips is list && data.payslips.size() <= 500));
+    }
+
+    function isValidBackupSnapshot(data) {
+      return data.keys().hasAll(['id', 'ownerId', 'label', 'createdAt']) &&
+        data.keys().hasOnly([
+          'id', 'ownerId', 'businessId', 'scope', 'label', 'createdBy',
+          'createdAt', 'sizeBytes', 'counts', 'payload'
+        ]) &&
+        isValidId(data.id) &&
+        isValidId(data.ownerId) &&
+        data.label is string && data.label.size() >= 1 && data.label.size() <= 120 &&
+        data.createdAt is string && data.createdAt.size() <= 40 &&
+        (!('counts' in data) || data.counts is map) &&
+        (!('payload' in data) || data.payload is map);
+    }
+
     // Connection test doc
     match /test/connection {
       allow get: if isSignedIn();
@@ -342,7 +445,7 @@ service cloud.firestore {
         incoming().createdAt == existing().createdAt &&
         (
           isAdmin() ||
-          (existing().ownerId == request.auth.uid && incoming().diff(existing()).affectedKeys().hasOnly(['name', 'taxPin', 'vatRate', 'etimsEnabled', 'etimsMode', 'paybillOrTill', 'installedModuleIds', 'posConfig', 'paymentGateways', 'layoutConfig', 'catalogTaxonomy', 'offers', 'updatedAt']))
+          (existing().ownerId == request.auth.uid && incoming().diff(existing()).affectedKeys().hasOnly(['name', 'taxPin', 'vatRate', 'etimsEnabled', 'etimsMode', 'paybillOrTill', 'ecommerceEnabled', 'customDomain', 'domainVerified', 'dnsToken', 'storefrontTagline', 'deliveryFee', 'freeDeliveryAbove', 'storefrontPickupEnabled', 'installedModuleIds', 'posConfig', 'paymentGateways', 'layoutConfig', 'catalogTaxonomy', 'offers', 'updatedAt']))
         );
       allow delete: if isAdmin() && isValidId(businessId);
 
@@ -417,6 +520,60 @@ service cloud.firestore {
           incoming().ownerId == existing().ownerId &&
           (isAdmin() || (existing().ownerId == request.auth.uid && incoming().diff(existing()).affectedKeys().hasOnly(['title', 'subtitle', 'status', 'amount', 'meta'])));
         allow delete: if isVerifiedUser() && isValidId(recordId) && (existing().ownerId == request.auth.uid || isAdmin());
+      }
+
+      // Stores subcollection
+      match /stores/{storeId} {
+        allow get: if isSignedIn() && isValidId(storeId) && (existing().ownerId == request.auth.uid || isAdmin());
+        allow list: if isSignedIn() && (resource.data.ownerId == request.auth.uid || isAdmin());
+        allow create: if isVerifiedUser() && isValidId(storeId) && isValidStoreBranch(incoming()) && incoming().ownerId == request.auth.uid && isBusinessOwner(businessId);
+        allow update: if isVerifiedUser() && isValidId(storeId) && isValidStoreBranch(incoming()) && incoming().ownerId == existing().ownerId && (isAdmin() || existing().ownerId == request.auth.uid);
+        allow delete: if isVerifiedUser() && isValidId(storeId) && (existing().ownerId == request.auth.uid || isAdmin());
+      }
+
+      // Invoices subcollection
+      match /invoices/{invoiceId} {
+        allow get: if isSignedIn() && isValidId(invoiceId) && (existing().ownerId == request.auth.uid || isAdmin());
+        allow list: if isSignedIn() && (resource.data.ownerId == request.auth.uid || isAdmin());
+        allow create: if isVerifiedUser() && isValidId(invoiceId) && isValidTaxInvoice(incoming()) && incoming().ownerId == request.auth.uid && isBusinessOwner(businessId);
+        allow update: if isVerifiedUser() && isValidId(invoiceId) && isValidTaxInvoice(incoming()) && incoming().ownerId == existing().ownerId && (isAdmin() || existing().ownerId == request.auth.uid);
+        allow delete: if isVerifiedUser() && isValidId(invoiceId) && (existing().ownerId == request.auth.uid || isAdmin());
+      }
+
+      // Online Orders subcollection
+      match /onlineOrders/{orderId} {
+        allow get: if isSignedIn() && isValidId(orderId) && (existing().ownerId == request.auth.uid || isAdmin());
+        allow list: if isSignedIn() && (resource.data.ownerId == request.auth.uid || isAdmin());
+        allow create: if isVerifiedUser() && isValidId(orderId) && isValidOnlineOrder(incoming()) && incoming().ownerId == request.auth.uid && isBusinessOwner(businessId);
+        allow update: if isVerifiedUser() && isValidId(orderId) && isValidOnlineOrder(incoming()) && incoming().ownerId == existing().ownerId && (isAdmin() || existing().ownerId == request.auth.uid);
+        allow delete: if isVerifiedUser() && isValidId(orderId) && (existing().ownerId == request.auth.uid || isAdmin());
+      }
+
+      // CRM Leads subcollection
+      match /crmLeads/{leadId} {
+        allow get: if isSignedIn() && isValidId(leadId) && (existing().ownerId == request.auth.uid || isAdmin());
+        allow list: if isSignedIn() && (resource.data.ownerId == request.auth.uid || isAdmin());
+        allow create: if isVerifiedUser() && isValidId(leadId) && isValidCrmLead(incoming()) && incoming().ownerId == request.auth.uid && isBusinessOwner(businessId);
+        allow update: if isVerifiedUser() && isValidId(leadId) && isValidCrmLead(incoming()) && incoming().ownerId == existing().ownerId && (isAdmin() || existing().ownerId == request.auth.uid);
+        allow delete: if isVerifiedUser() && isValidId(leadId) && (existing().ownerId == request.auth.uid || isAdmin());
+      }
+
+      // Payroll Runs subcollection
+      match /payrollRuns/{runId} {
+        allow get: if isSignedIn() && isValidId(runId) && (existing().ownerId == request.auth.uid || isAdmin());
+        allow list: if isSignedIn() && (resource.data.ownerId == request.auth.uid || isAdmin());
+        allow create: if isVerifiedUser() && isValidId(runId) && isValidPayrollRun(incoming()) && incoming().ownerId == request.auth.uid && isBusinessOwner(businessId);
+        allow update: if isVerifiedUser() && isValidId(runId) && isValidPayrollRun(incoming()) && incoming().ownerId == existing().ownerId && (isAdmin() || existing().ownerId == request.auth.uid);
+        allow delete: if isVerifiedUser() && isValidId(runId) && (existing().ownerId == request.auth.uid || isAdmin());
+      }
+
+      // Backups subcollection
+      match /backups/{backupId} {
+        allow get: if isSignedIn() && isValidId(backupId) && (existing().ownerId == request.auth.uid || isAdmin());
+        allow list: if isSignedIn() && (resource.data.ownerId == request.auth.uid || isAdmin());
+        allow create: if isVerifiedUser() && isValidId(backupId) && isValidBackupSnapshot(incoming()) && incoming().ownerId == request.auth.uid && isBusinessOwner(businessId);
+        allow update: if isVerifiedUser() && isValidId(backupId) && isValidBackupSnapshot(incoming()) && incoming().ownerId == existing().ownerId && (isAdmin() || existing().ownerId == request.auth.uid);
+        allow delete: if isVerifiedUser() && isValidId(backupId) && (existing().ownerId == request.auth.uid || isAdmin());
       }
     }
   }

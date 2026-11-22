@@ -3,18 +3,23 @@ import {
   ArrowLeftRight,
   CheckCircle2,
   Clock,
+  Edit3,
   Eye,
   EyeOff,
   KeyRound,
   LogIn,
   LogOut,
   MapPin,
+  Minus,
   PackageCheck,
   Plus,
+  Printer,
   RefreshCw,
   Shield,
   Star,
+  Trash2,
   Users,
+  X,
 } from 'lucide-react';
 import {
   AccountTier,
@@ -23,6 +28,8 @@ import {
   EmployeePermissionSet,
   EmployeeRecord,
   ErpRecord,
+  PayrollRunPayslip,
+  PayrollRunRecord,
   ProductItem,
   ShiftAttendanceLog,
   SlotStatus,
@@ -45,6 +52,7 @@ interface ModuleWorkspaceProps {
   products: ProductItem[];
   employees: EmployeeRecord[];
   attendanceLogs: ShiftAttendanceLog[];
+  payrollRuns: PayrollRunRecord[];
   records: ErpRecord[];
   accountTier: AccountTier;
   activeRole: UserRole;
@@ -61,6 +69,25 @@ interface ModuleWorkspaceProps {
     initialQty: number;
     taxCode: TaxCode;
   }) => Promise<void>;
+  onUpdateProduct: (
+    productId: string,
+    patch: {
+      name?: string;
+      sku?: string;
+      category?: string;
+      subCategory?: string;
+      price?: number;
+      cost?: number;
+      taxCode?: TaxCode;
+      reorderPoint?: number;
+    }
+  ) => Promise<void>;
+  onAdjustStock: (payload: {
+    productId: string;
+    storeId: string;
+    delta: number;
+    reason: string;
+  }) => Promise<void>;
   onTransferStock: (payload: {
     productId: string;
     fromStoreId: string;
@@ -76,6 +103,21 @@ interface ModuleWorkspaceProps {
     grossSalary: number;
     permissions: EmployeePermissionSet;
   }) => Promise<void>;
+  onUpdateEmployee: (
+    employeeId: string,
+    patch: Partial<{
+      name: string;
+      email: string;
+      role: UserRole;
+      pinCode: string;
+      branchId: string;
+      grossSalary: number;
+      active: boolean;
+      permissions: EmployeePermissionSet;
+    }>
+  ) => Promise<void>;
+  onDeleteEmployee: (employeeId: string) => Promise<void>;
+  onRunPayroll: (periodLabel: string) => Promise<PayrollRunRecord | null>;
   onEmployeeAttendance: (
     employeeId: string,
     action: 'clock_in' | 'clock_out',
@@ -167,12 +209,18 @@ export const ModuleWorkspace: React.FC<ModuleWorkspaceProps> = ({
   products,
   employees,
   attendanceLogs,
+  payrollRuns,
   records,
   accountTier,
   activeRole,
   onCreateProduct,
+  onUpdateProduct,
+  onAdjustStock,
   onTransferStock,
   onCreateEmployee,
+  onUpdateEmployee,
+  onDeleteEmployee,
+  onRunPayroll,
   onEmployeeAttendance,
   onSlotStatusChange,
   onReceivePurchaseOrder,
@@ -181,14 +229,7 @@ export const ModuleWorkspace: React.FC<ModuleWorkspaceProps> = ({
   const perms = ROLE_PERMISSIONS[activeRole];
 
   const taxonomy = useMemo(
-    () =>
-      business.catalogTaxonomy && business.catalogTaxonomy.length > 0
-        ? business.catalogTaxonomy
-        : [
-            { id: 'cat-bev', name: 'Beverages', subCategories: ['Coffee', 'Tea'] },
-            { id: 'cat-pan', name: 'Pantry', subCategories: ['Cooking Oils'] },
-            { id: 'cat-sta', name: 'Staples', subCategories: ['Flour & Rice'] },
-          ],
+    () => business.catalogTaxonomy || [],
     [business.catalogTaxonomy]
   );
 
@@ -217,14 +258,22 @@ export const ModuleWorkspace: React.FC<ModuleWorkspaceProps> = ({
   // Inventory state
   const [newSkuName, setNewSkuName] = useState('');
   const [newSkuCode, setNewSkuCode] = useState('');
-  const [newSkuCategory, setNewSkuCategory] = useState(taxonomy[0]?.name || 'Beverages');
+  const [newSkuCategory, setNewSkuCategory] = useState(taxonomy[0]?.name || 'General');
   const [newSkuSubCategory, setNewSkuSubCategory] = useState(
     taxonomy[0]?.subCategories[0] || ''
   );
   const [newSkuSlotKey, setNewSkuSlotKey] = useState('');
   const [newSkuPrice, setNewSkuPrice] = useState('450');
+  const [newSkuCost, setNewSkuCost] = useState('');
   const [newSkuQty, setNewSkuQty] = useState('30');
   const [newSkuTax, setNewSkuTax] = useState<TaxCode>('B_16');
+  const [invSearch, setInvSearch] = useState('');
+  const [invCatFilter, setInvCatFilter] = useState('All');
+  const [invLowOnly, setInvLowOnly] = useState(false);
+  const [editingProduct, setEditingProduct] = useState<ProductItem | null>(null);
+  const [editProdPrice, setEditProdPrice] = useState('');
+  const [editProdCost, setEditProdCost] = useState('');
+  const [editProdReorder, setEditProdReorder] = useState('');
 
   const [transferProdId, setTransferProdId] = useState(products[0]?.id || '');
   const [transferFromId, setTransferFromId] = useState(stores[0]?.id || '');
@@ -232,7 +281,7 @@ export const ModuleWorkspace: React.FC<ModuleWorkspaceProps> = ({
   const [transferQty, setTransferQty] = useState(5);
   const [transferFeedback, setTransferFeedback] = useState('');
 
-  // Employees & PIN provisioning state
+  // Employees & PIN provisioning/editing state
   const [empName, setEmpName] = useState('');
   const [empEmail, setEmpEmail] = useState('');
   const [empRole, setEmpRole] = useState<UserRole>('Cashier');
@@ -242,10 +291,20 @@ export const ModuleWorkspace: React.FC<ModuleWorkspaceProps> = ({
   const [empPerms, setEmpPerms] = useState<EmployeePermissionSet>(DEFAULT_EMP_PERMS.Cashier);
   const [revealPins, setRevealPins] = useState(false);
   const [empCreatedMsg, setEmpCreatedMsg] = useState('');
+  const [editingEmp, setEditingEmp] = useState<EmployeeRecord | null>(null);
 
-  // Payroll calculator state
+  // Payroll calculator & execution state
   const [calcGross, setCalcGross] = useState(85000);
   const payrollBreakdown = useMemo(() => calculateKenyaPayroll(calcGross), [calcGross]);
+  const [payrollPeriod, setPayrollPeriod] = useState(
+    new Date().toLocaleDateString('en-US', { month: 'short', year: 'numeric' })
+  );
+  const [runningPayroll, setRunningPayroll] = useState(false);
+  const [payrollMsg, setPayrollMsg] = useState('');
+  const [previewPayslip, setPreviewPayslip] = useState<{
+    runPeriod: string;
+    slip: PayrollRunPayslip;
+  } | null>(null);
 
   // Purchase GRN state
   const [receivingId, setReceivingId] = useState<string | null>(null);
@@ -268,26 +327,61 @@ export const ModuleWorkspace: React.FC<ModuleWorkspaceProps> = ({
   if (module.id === 'inventory') {
     const selectedTaxGroup = taxonomy.find((c) => c.name === newSkuCategory);
     const subCategoryOptions = selectedTaxGroup?.subCategories || [];
+    const distinctCategories = Array.from(
+      new Set(['All', ...taxonomy.map((c) => c.name), ...products.map((p) => p.category)])
+    );
+
+    const visibleProducts = products.filter((p) => {
+      const q = invSearch.trim().toLowerCase();
+      const catOk = invCatFilter === 'All' || p.category === invCatFilter;
+      const qtyHere = p.stockByStore[activeStore.id] ?? 0;
+      const lowOk = !invLowOnly || qtyHere <= p.reorderPoint;
+      const qOk =
+        !q ||
+        p.name.toLowerCase().includes(q) ||
+        p.sku.toLowerCase().includes(q) ||
+        p.barcode.includes(q);
+      return catOk && lowOk && qOk;
+    });
 
     const handleAddSku = async (e: React.FormEvent) => {
       e.preventDefault();
       if (!newSkuName.trim()) return;
       const matchedSlot = allShelfSlots.find((s) => `${s.zoneId}::${s.slotId}` === newSkuSlotKey);
+      const parsedPrice = Number(newSkuPrice) || 100;
+      const parsedCost = Number(newSkuCost) > 0 ? Number(newSkuCost) : Math.round(parsedPrice * 0.7);
       await onCreateProduct({
         name: newSkuName.trim(),
         sku: newSkuCode.trim(),
-        category: newSkuCategory,
-        subCategory: newSkuSubCategory || undefined,
+        category: newSkuCategory.trim() || 'General',
+        subCategory: newSkuSubCategory.trim() || undefined,
         zoneId: matchedSlot?.zoneId,
         slotId: matchedSlot?.slotId,
         shelfCode: matchedSlot ? `${matchedSlot.code} · ${matchedSlot.label}` : undefined,
-        price: Number(newSkuPrice) || 100,
-        cost: Math.round((Number(newSkuPrice) || 100) * 0.7),
+        price: parsedPrice,
+        cost: parsedCost,
         initialQty: Number(newSkuQty) || 0,
         taxCode: newSkuTax,
       });
       setNewSkuName('');
       setNewSkuCode('');
+      setNewSkuCost('');
+    };
+
+    const handleSaveProductEdit = async (e: React.FormEvent) => {
+      e.preventDefault();
+      if (!editingProduct) return;
+      await onUpdateProduct(editingProduct.id, {
+        name: editingProduct.name,
+        sku: editingProduct.sku,
+        category: editingProduct.category,
+        subCategory: editingProduct.subCategory,
+        price: Number(editProdPrice) || editingProduct.price,
+        cost: Number(editProdCost) || editingProduct.cost,
+        reorderPoint: Math.max(0, Number(editProdReorder) || 0),
+        taxCode: editingProduct.taxCode,
+      });
+      setEditingProduct(null);
     };
 
     const handleTransfer = async (e: React.FormEvent) => {
@@ -310,10 +404,10 @@ export const ModuleWorkspace: React.FC<ModuleWorkspaceProps> = ({
       <div className="space-y-6">
         <div>
           <h1 className="font-display text-2xl font-bold text-slate-900 dark:text-slate-100">
-            Multi-Store Inventory, Shelves & Product Taxonomy
+            Multi-Store Inventory, Shelves &amp; Product Catalog
           </h1>
           <p className="mt-1 text-sm text-slate-600 dark:text-slate-400">
-            Assign products to physical shelves/sections for fast restocking while maintaining separate 2-tier Categories & Subcategories.
+            Manage real branch stock levels, inline SKU pricing, quick +/- stock counts, and inter-store transfers for {business.name}.
           </p>
         </div>
 
@@ -332,7 +426,7 @@ export const ModuleWorkspace: React.FC<ModuleWorkspaceProps> = ({
                 required
                 value={newSkuName}
                 onChange={(e) => setNewSkuName(e.target.value)}
-                placeholder="Product Name"
+                placeholder="Product Name *"
                 className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-900 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-100"
               />
               <input
@@ -342,46 +436,68 @@ export const ModuleWorkspace: React.FC<ModuleWorkspaceProps> = ({
                 placeholder="SKU (auto if blank)"
                 className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 font-mono text-xs text-slate-900 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-100"
               />
-              <select
-                value={newSkuCategory}
-                onChange={(e) => {
-                  const cat = e.target.value;
-                  setNewSkuCategory(cat);
-                  const grp = taxonomy.find((c) => c.name === cat);
-                  setNewSkuSubCategory(grp?.subCategories[0] || '');
-                }}
-                className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-900 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-100"
-              >
-                {taxonomy.map((c) => (
-                  <option key={c.id} value={c.name}>
-                    Category: {c.name}
-                  </option>
-                ))}
-              </select>
-              <select
-                value={newSkuSubCategory}
-                onChange={(e) => setNewSkuSubCategory(e.target.value)}
-                className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-900 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-100"
-              >
-                <option value="">Subcategory (optional)</option>
-                {subCategoryOptions.map((sub) => (
-                  <option key={sub} value={sub}>
-                    Sub: {sub}
-                  </option>
-                ))}
-              </select>
-              <select
-                value={newSkuSlotKey}
-                onChange={(e) => setNewSkuSlotKey(e.target.value)}
-                className="sm:col-span-2 rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-900 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-100"
-              >
-                <option value="">Physical Section / Shelf Location (Optional)</option>
-                {allShelfSlots.map((s) => (
-                  <option key={`${s.zoneId}::${s.slotId}`} value={`${s.zoneId}::${s.slotId}`}>
-                    {s.zoneName} → {s.code} ({s.label})
-                  </option>
-                ))}
-              </select>
+              {taxonomy.length > 0 ? (
+                <select
+                  value={newSkuCategory}
+                  onChange={(e) => {
+                    const cat = e.target.value;
+                    setNewSkuCategory(cat);
+                    const grp = taxonomy.find((c) => c.name === cat);
+                    setNewSkuSubCategory(grp?.subCategories[0] || '');
+                  }}
+                  className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-900 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-100"
+                >
+                  {taxonomy.map((c) => (
+                    <option key={c.id} value={c.name}>
+                      Category: {c.name}
+                    </option>
+                  ))}
+                </select>
+              ) : (
+                <input
+                  type="text"
+                  value={newSkuCategory}
+                  onChange={(e) => setNewSkuCategory(e.target.value)}
+                  placeholder="Category (e.g. Electronics)"
+                  className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-900 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-100"
+                />
+              )}
+              {subCategoryOptions.length > 0 ? (
+                <select
+                  value={newSkuSubCategory}
+                  onChange={(e) => setNewSkuSubCategory(e.target.value)}
+                  className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-900 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-100"
+                >
+                  <option value="">Subcategory (optional)</option>
+                  {subCategoryOptions.map((sub) => (
+                    <option key={sub} value={sub}>
+                      Sub: {sub}
+                    </option>
+                  ))}
+                </select>
+              ) : (
+                <input
+                  type="text"
+                  value={newSkuSubCategory}
+                  onChange={(e) => setNewSkuSubCategory(e.target.value)}
+                  placeholder="Subcategory (optional)"
+                  className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-900 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-100"
+                />
+              )}
+              {allShelfSlots.length > 0 && (
+                <select
+                  value={newSkuSlotKey}
+                  onChange={(e) => setNewSkuSlotKey(e.target.value)}
+                  className="sm:col-span-2 rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-900 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-100"
+                >
+                  <option value="">Physical Section / Shelf Location (Optional)</option>
+                  {allShelfSlots.map((s) => (
+                    <option key={`${s.zoneId}::${s.slotId}`} value={`${s.zoneId}::${s.slotId}`}>
+                      {s.zoneName} → {s.code} ({s.label})
+                    </option>
+                  ))}
+                </select>
+              )}
               <select
                 value={newSkuTax}
                 onChange={(e) => setNewSkuTax(e.target.value as TaxCode)}
@@ -391,22 +507,30 @@ export const ModuleWorkspace: React.FC<ModuleWorkspaceProps> = ({
                 <option value="E_0">Zero-Rated 0% (Code E)</option>
                 <option value="A_EXEMPT">VAT Exempt (Code A)</option>
               </select>
-              <div className="grid grid-cols-2 gap-2">
+              <div className="grid grid-cols-3 gap-2">
                 <input
                   type="number"
                   min={1}
                   value={newSkuPrice}
                   onChange={(e) => setNewSkuPrice(e.target.value)}
-                  placeholder={`Price (${business.currency})`}
-                  className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 font-mono text-xs text-slate-900 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-100"
+                  placeholder="Sell Price"
+                  className="rounded-lg border border-slate-200 bg-slate-50 px-2.5 py-2 font-mono text-xs text-slate-900 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-100"
+                />
+                <input
+                  type="number"
+                  min={0}
+                  value={newSkuCost}
+                  onChange={(e) => setNewSkuCost(e.target.value)}
+                  placeholder="Unit Cost"
+                  className="rounded-lg border border-slate-200 bg-slate-50 px-2.5 py-2 font-mono text-xs text-slate-900 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-100"
                 />
                 <input
                   type="number"
                   min={0}
                   value={newSkuQty}
                   onChange={(e) => setNewSkuQty(e.target.value)}
-                  placeholder="Opening Qty"
-                  className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 font-mono text-xs text-slate-900 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-100"
+                  placeholder="Qty"
+                  className="rounded-lg border border-slate-200 bg-slate-50 px-2.5 py-2 font-mono text-xs text-slate-900 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-100"
                 />
               </div>
             </div>
@@ -436,13 +560,18 @@ export const ModuleWorkspace: React.FC<ModuleWorkspaceProps> = ({
               <select
                 value={transferProdId}
                 onChange={(e) => setTransferProdId(e.target.value)}
-                className="sm:col-span-2 rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-900 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-100"
+                disabled={products.length === 0}
+                className="sm:col-span-2 rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-900 disabled:opacity-50 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-100"
               >
-                {products.map((p) => (
-                  <option key={p.id} value={p.id}>
-                    {p.sku} — {p.name}
-                  </option>
-                ))}
+                {products.length === 0 ? (
+                  <option value="">Create a product first to transfer stock</option>
+                ) : (
+                  products.map((p) => (
+                    <option key={p.id} value={p.id}>
+                      {p.sku} — {p.name}
+                    </option>
+                  ))
+                )}
               </select>
 
               <select
@@ -479,7 +608,7 @@ export const ModuleWorkspace: React.FC<ModuleWorkspaceProps> = ({
 
               <button
                 type="submit"
-                disabled={!perms.canEditInventory || stores.length < 2}
+                disabled={!perms.canEditInventory || stores.length < 2 || products.length === 0}
                 className="rounded-lg bg-slate-900 px-4 py-2 text-xs font-semibold text-white hover:bg-slate-800 disabled:opacity-40 dark:bg-teal-600"
               >
                 Dispatch Transfer
@@ -494,108 +623,309 @@ export const ModuleWorkspace: React.FC<ModuleWorkspaceProps> = ({
           </form>
         </div>
 
-        {/* Multi-Branch Stock Matrix Table */}
+        {/* Multi-Branch Stock Matrix Table with Filter & Quick Adjust */}
         <section className="rounded-xl border border-slate-200 bg-white dark:border-slate-800 dark:bg-slate-900">
-          <div className="overflow-x-auto">
-            <table className="w-full text-left text-xs">
-              <thead>
-                <tr className="border-b border-slate-200 text-slate-500 dark:border-slate-800 dark:text-slate-400">
-                  <th className="px-5 py-3 font-medium">SKU / Barcode</th>
-                  <th className="px-5 py-3 font-medium">Product & Taxonomy</th>
-                  <th className="px-5 py-3 font-medium">Section / Shelf</th>
-                  <th className="px-5 py-3 font-medium">KRA Tax</th>
-                  <th className="px-5 py-3 text-right font-medium">Price</th>
-                  {stores.map((s) => (
-                    <th key={s.id} className="px-4 py-3 text-right font-medium">
-                      {s.code}
-                    </th>
-                  ))}
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
-                {products.map((p) => {
-                  const slotMatch = allShelfSlots.find(
-                    (s) => s.zoneId === p.zoneId && s.slotId === p.slotId
-                  );
-                  const needsRestock = slotMatch?.status === 'needs_restock';
+          <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-200 px-5 py-3.5 dark:border-slate-800">
+            <h2 className="font-display text-sm font-semibold text-slate-900 dark:text-slate-100">
+              Branch Stock Matrix ({visibleProducts.length} SKUs)
+            </h2>
+            <div className="flex flex-wrap items-center gap-2 text-xs">
+              <input
+                type="search"
+                value={invSearch}
+                onChange={(e) => setInvSearch(e.target.value)}
+                placeholder="Search SKU or name..."
+                className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-1.5 text-xs text-slate-900 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-100"
+              />
+              <select
+                value={invCatFilter}
+                onChange={(e) => setInvCatFilter(e.target.value)}
+                className="rounded-lg border border-slate-200 bg-slate-50 px-2.5 py-1.5 text-xs text-slate-900 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-100"
+              >
+                {distinctCategories.map((c) => (
+                  <option key={c} value={c}>
+                    {c === 'All' ? 'All Categories' : c}
+                  </option>
+                ))}
+              </select>
+              <label className="inline-flex items-center gap-1.5 text-slate-600 dark:text-slate-300">
+                <input
+                  type="checkbox"
+                  checked={invLowOnly}
+                  onChange={(e) => setInvLowOnly(e.target.checked)}
+                  className="rounded border-slate-300 text-teal-700"
+                />
+                <span>Low Stock Only</span>
+              </label>
+            </div>
+          </div>
 
-                  return (
-                    <tr key={p.id} className="hover:bg-slate-50 dark:hover:bg-slate-800/40">
-                      <td className="px-5 py-3 font-mono text-slate-600 dark:text-slate-300">
-                        <div>{p.sku}</div>
-                        <div className="text-[11px] text-slate-400">{p.barcode}</div>
-                      </td>
-                      <td className="px-5 py-3">
-                        <p className="font-semibold text-slate-900 dark:text-slate-100">{p.name}</p>
-                        <p className="text-[11px] text-teal-700 dark:text-teal-400">
-                          {p.category}
-                          {p.subCategory ? ` › ${p.subCategory}` : ''}
-                        </p>
-                        {p.variants && (
-                          <p className="text-[11px] text-slate-500 dark:text-slate-400">
-                            Matrix: {p.variants.join(' / ')}
+          {visibleProducts.length === 0 ? (
+            <div className="p-10 text-center">
+              <p className="text-sm font-medium text-slate-800 dark:text-slate-200">
+                No products in {business.name} inventory yet
+              </p>
+              <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">
+                Use the "Add Product SKU" form above to stock items for POS and eCommerce checkout.
+              </p>
+            </div>
+          ) : (
+            <div className="overflow-x-auto">
+              <table className="w-full text-left text-xs">
+                <thead>
+                  <tr className="border-b border-slate-200 text-slate-500 dark:border-slate-800 dark:text-slate-400">
+                    <th className="px-5 py-3 font-medium">SKU / Barcode</th>
+                    <th className="px-5 py-3 font-medium">Product &amp; Taxonomy</th>
+                    <th className="px-5 py-3 font-medium">Section / Shelf</th>
+                    <th className="px-5 py-3 font-medium">KRA Tax</th>
+                    <th className="px-5 py-3 text-right font-medium">Price / Cost</th>
+                    {stores.map((s) => (
+                      <th key={s.id} className="px-4 py-3 text-right font-medium">
+                        {s.code}
+                      </th>
+                    ))}
+                    {perms.canEditInventory && (
+                      <th className="px-4 py-3 text-right font-medium">Adjust / Edit</th>
+                    )}
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
+                  {visibleProducts.map((p) => {
+                    const slotMatch = allShelfSlots.find(
+                      (s) => s.zoneId === p.zoneId && s.slotId === p.slotId
+                    );
+                    const needsRestock = slotMatch?.status === 'needs_restock';
+
+                    return (
+                      <tr key={p.id} className="hover:bg-slate-50 dark:hover:bg-slate-800/40">
+                        <td className="px-5 py-3 font-mono text-slate-600 dark:text-slate-300">
+                          <div>{p.sku}</div>
+                          <div className="text-[11px] text-slate-400">{p.barcode}</div>
+                        </td>
+                        <td className="px-5 py-3">
+                          <p className="font-semibold text-slate-900 dark:text-slate-100">{p.name}</p>
+                          <p className="text-[11px] text-teal-700 dark:text-teal-400">
+                            {p.category}
+                            {p.subCategory ? ` › ${p.subCategory}` : ''}
                           </p>
-                        )}
-                      </td>
-                      <td className="px-5 py-3">
-                        {p.shelfCode || slotMatch ? (
-                          <div className="flex flex-col items-start gap-1">
-                            <span className="inline-flex items-center gap-1 font-mono text-[11px] font-medium text-slate-700 dark:text-slate-300">
-                              <MapPin className="h-3 w-3 text-teal-600" />
-                              {p.shelfCode || `${slotMatch?.code} · ${slotMatch?.label}`}
-                            </span>
-                            {slotMatch && perms.canEditInventory && (
+                        </td>
+                        <td className="px-5 py-3">
+                          {p.shelfCode || slotMatch ? (
+                            <div className="flex flex-col items-start gap-1">
+                              <span className="inline-flex items-center gap-1 font-mono text-[11px] font-medium text-slate-700 dark:text-slate-300">
+                                <MapPin className="h-3 w-3 text-teal-600" />
+                                {p.shelfCode || `${slotMatch?.code} · ${slotMatch?.label}`}
+                              </span>
+                              {slotMatch && perms.canEditInventory && (
+                                <button
+                                  type="button"
+                                  onClick={() =>
+                                    onSlotStatusChange(
+                                      slotMatch.zoneId,
+                                      slotMatch.slotId,
+                                      needsRestock ? 'available' : 'needs_restock'
+                                    )
+                                  }
+                                  className={`rounded px-2 py-0.5 text-[10px] font-semibold ${
+                                    needsRestock
+                                      ? 'bg-amber-100 text-amber-800 dark:bg-amber-950/60 dark:text-amber-300'
+                                      : 'bg-slate-100 text-slate-600 dark:bg-slate-800 dark:text-slate-300'
+                                  }`}
+                                >
+                                  {needsRestock ? 'Restocked ✓' : 'Flag Restock'}
+                                </button>
+                              )}
+                            </div>
+                          ) : (
+                            <span className="text-[11px] text-slate-400">Unassigned</span>
+                          )}
+                        </td>
+                        <td className="px-5 py-3 text-slate-600 dark:text-slate-300">
+                          {getTaxLabel(p.taxCode, business.vatRate)}
+                        </td>
+                        <td className="px-5 py-3 text-right font-mono tabular-nums">
+                          <div className="font-semibold">{formatMoney(p.price, business.currency)}</div>
+                          {activeRole !== 'Cashier' && activeRole !== 'Field Agent' && (
+                            <div className="text-[10px] text-slate-400">
+                              Cost: {formatMoney(p.cost, business.currency)}
+                            </div>
+                          )}
+                        </td>
+                        {stores.map((s) => {
+                          const q = p.stockByStore[s.id] ?? 0;
+                          return (
+                            <td
+                              key={s.id}
+                              className={`px-4 py-3 text-right font-mono tabular-nums ${
+                                q <= p.reorderPoint
+                                  ? 'font-bold text-amber-700 dark:text-amber-400'
+                                  : 'text-slate-800 dark:text-slate-200'
+                              }`}
+                            >
+                              {q}
+                            </td>
+                          );
+                        })}
+                        {perms.canEditInventory && (
+                          <td className="px-4 py-3 text-right">
+                            <div className="inline-flex items-center gap-1">
                               <button
                                 type="button"
+                                title="Decrease stock in active branch (-1)"
                                 onClick={() =>
-                                  onSlotStatusChange(
-                                    slotMatch.zoneId,
-                                    slotMatch.slotId,
-                                    needsRestock ? 'available' : 'needs_restock'
-                                  )
+                                  onAdjustStock({
+                                    productId: p.id,
+                                    storeId: activeStore.id,
+                                    delta: -1,
+                                    reason: 'Manual Stock Count -1',
+                                  })
                                 }
-                                className={`rounded px-2 py-0.5 text-[10px] font-semibold ${
-                                  needsRestock
-                                    ? 'bg-amber-100 text-amber-800 hover:bg-emerald-100 hover:text-emerald-800 dark:bg-amber-950/60 dark:text-amber-300'
-                                    : 'bg-slate-100 text-slate-600 hover:bg-amber-100 hover:text-amber-800 dark:bg-slate-800 dark:text-slate-300'
-                                }`}
+                                className="rounded border border-slate-200 p-1 text-slate-600 hover:bg-slate-100 dark:border-slate-700 dark:text-slate-300"
                               >
-                                {needsRestock ? 'Restocked ✓' : 'Flag Restock'}
+                                <Minus className="h-3 w-3" />
                               </button>
-                            )}
-                          </div>
-                        ) : (
-                          <span className="text-[11px] text-slate-400">Unassigned</span>
-                        )}
-                      </td>
-                      <td className="px-5 py-3 text-slate-600 dark:text-slate-300">
-                        {getTaxLabel(p.taxCode, business.vatRate)}
-                      </td>
-                      <td className="px-5 py-3 text-right font-mono font-semibold tabular-nums">
-                        {formatMoney(p.price, business.currency)}
-                      </td>
-                      {stores.map((s) => {
-                        const q = p.stockByStore[s.id] ?? 0;
-                        return (
-                          <td
-                            key={s.id}
-                            className={`px-4 py-3 text-right font-mono tabular-nums ${
-                              q <= p.reorderPoint
-                                ? 'font-bold text-amber-700 dark:text-amber-400'
-                                : 'text-slate-800 dark:text-slate-200'
-                            }`}
-                          >
-                            {q}
+                              <button
+                                type="button"
+                                title="Increase stock in active branch (+5)"
+                                onClick={() =>
+                                  onAdjustStock({
+                                    productId: p.id,
+                                    storeId: activeStore.id,
+                                    delta: 5,
+                                    reason: 'Manual Restock +5',
+                                  })
+                                }
+                                className="rounded border border-slate-200 p-1 text-emerald-700 hover:bg-emerald-50 dark:border-slate-700 dark:text-emerald-400"
+                              >
+                                <Plus className="h-3 w-3" />
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  setEditingProduct({ ...p });
+                                  setEditProdPrice(String(p.price));
+                                  setEditProdCost(String(p.cost));
+                                  setEditProdReorder(String(p.reorderPoint));
+                                }}
+                                className="inline-flex items-center gap-1 rounded border border-slate-200 px-2 py-1 text-[11px] font-medium text-slate-700 hover:bg-slate-100 dark:border-slate-700 dark:text-slate-200"
+                              >
+                                <Edit3 className="h-3 w-3" />
+                                <span>Edit</span>
+                              </button>
+                            </div>
                           </td>
-                        );
-                      })}
-                    </tr>
-                  );
-                })}
-              </tbody>
-            </table>
-          </div>
+                        )}
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          )}
         </section>
+
+        {/* Edit Product SKU Modal */}
+        {editingProduct && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/60 p-4 backdrop-blur-xs">
+            <div className="w-full max-w-md rounded-xl border border-slate-200 bg-white p-6 shadow-xl dark:border-slate-800 dark:bg-slate-900">
+              <div className="flex items-center justify-between border-b border-slate-200 pb-3 dark:border-slate-800">
+                <h3 className="font-display text-sm font-bold text-slate-900 dark:text-slate-100">
+                  Edit SKU · {editingProduct.sku}
+                </h3>
+                <button
+                  type="button"
+                  onClick={() => setEditingProduct(null)}
+                  className="rounded p-1 text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800"
+                >
+                  <X className="h-4 w-4" />
+                </button>
+              </div>
+              <form onSubmit={handleSaveProductEdit} className="mt-4 space-y-3 text-xs">
+                <input
+                  type="text"
+                  required
+                  value={editingProduct.name}
+                  onChange={(e) =>
+                    setEditingProduct((prev) => (prev ? { ...prev, name: e.target.value } : prev))
+                  }
+                  placeholder="Product Name"
+                  className="w-full rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-slate-900 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-100"
+                />
+                <div className="grid grid-cols-2 gap-2">
+                  <input
+                    type="text"
+                    value={editingProduct.category}
+                    onChange={(e) =>
+                      setEditingProduct((prev) =>
+                        prev ? { ...prev, category: e.target.value } : prev
+                      )
+                    }
+                    placeholder="Category"
+                    className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-slate-900 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-100"
+                  />
+                  <input
+                    type="text"
+                    value={editingProduct.subCategory || ''}
+                    onChange={(e) =>
+                      setEditingProduct((prev) =>
+                        prev ? { ...prev, subCategory: e.target.value } : prev
+                      )
+                    }
+                    placeholder="Subcategory"
+                    className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-slate-900 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-100"
+                  />
+                </div>
+                <div className="grid grid-cols-3 gap-2">
+                  <div>
+                    <label className="text-[10px] text-slate-500">Sell Price</label>
+                    <input
+                      type="number"
+                      min={0}
+                      value={editProdPrice}
+                      onChange={(e) => setEditProdPrice(e.target.value)}
+                      className="mt-0.5 w-full rounded-lg border border-slate-200 bg-slate-50 px-2.5 py-1.5 font-mono text-slate-900 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-100"
+                    />
+                  </div>
+                  <div>
+                    <label className="text-[10px] text-slate-500">Unit Cost</label>
+                    <input
+                      type="number"
+                      min={0}
+                      value={editProdCost}
+                      onChange={(e) => setEditProdCost(e.target.value)}
+                      className="mt-0.5 w-full rounded-lg border border-slate-200 bg-slate-50 px-2.5 py-1.5 font-mono text-slate-900 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-100"
+                    />
+                  </div>
+                  <div>
+                    <label className="text-[10px] text-slate-500">Reorder At</label>
+                    <input
+                      type="number"
+                      min={0}
+                      value={editProdReorder}
+                      onChange={(e) => setEditProdReorder(e.target.value)}
+                      className="mt-0.5 w-full rounded-lg border border-slate-200 bg-slate-50 px-2.5 py-1.5 font-mono text-slate-900 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-100"
+                    />
+                  </div>
+                </div>
+                <div className="flex justify-end gap-2 pt-2">
+                  <button
+                    type="button"
+                    onClick={() => setEditingProduct(null)}
+                    className="rounded-lg border border-slate-200 px-4 py-2 font-medium text-slate-700 dark:border-slate-700 dark:text-slate-200"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    type="submit"
+                    className="rounded-lg bg-teal-700 px-4 py-2 font-semibold text-white hover:bg-teal-800"
+                  >
+                    Save Changes
+                  </button>
+                </div>
+              </form>
+            </div>
+          </div>
+        )}
       </div>
     );
   }
@@ -725,18 +1055,34 @@ export const ModuleWorkspace: React.FC<ModuleWorkspaceProps> = ({
               <thead>
                 <tr className="border-b border-slate-200 text-slate-500 dark:border-slate-800 dark:text-slate-400">
                   <th className="px-5 py-2.5 font-medium">Employee</th>
-                  <th className="px-5 py-2.5 font-medium">Role & Branch</th>
-                  <th className="px-5 py-2.5 font-medium">Shift Status</th>
-                  <th className="px-5 py-2.5 font-medium">Rating & Tips</th>
+                  <th className="px-5 py-2.5 font-medium">Role &amp; Branch</th>
+                  <th className="px-5 py-2.5 font-medium">Shift Status &amp; Hours</th>
+                  <th className="px-5 py-2.5 font-medium">Rating &amp; Tips</th>
                   <th className="px-5 py-2.5 font-medium">POS PIN</th>
-                  <th className="px-5 py-2.5 text-right font-medium">Max Disc</th>
-                  <th className="px-5 py-2.5 font-medium">Granted Capabilities</th>
+                  <th className="px-5 py-2.5 text-right font-medium">Salary / Disc</th>
+                  <th className="px-5 py-2.5 font-medium">Capabilities</th>
+                  {canProvisionStaff && <th className="px-5 py-2.5 text-right font-medium">Manage</th>}
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
                 {employees.map((emp) => {
                   const branchName =
                     stores.find((s) => s.id === emp.branchId)?.name || emp.branchId;
+                  const empLogs = attendanceLogs
+                    .filter((l) => l.businessId === business.id && l.employeeId === emp.id)
+                    .sort((a, b) => a.timestamp.localeCompare(b.timestamp));
+                  let totalMs = 0;
+                  let lastIn: number | null = null;
+                  for (const lg of empLogs) {
+                    const ts = new Date(lg.timestamp).getTime();
+                    if (lg.action === 'clock_in') lastIn = ts;
+                    else if (lg.action === 'clock_out' && lastIn !== null) {
+                      totalMs += Math.max(0, ts - lastIn);
+                      lastIn = null;
+                    }
+                  }
+                  const loggedHours = Math.round((totalMs / 3600000) * 10) / 10;
+
                   const capabilities = [
                     emp.permissions.canVoidSale && 'Void Sale',
                     emp.permissions.canOpenDrawer && 'Cash Drawer',
@@ -752,7 +1098,7 @@ export const ModuleWorkspace: React.FC<ModuleWorkspaceProps> = ({
                     <tr key={emp.id} className="hover:bg-slate-50 dark:hover:bg-slate-800/40">
                       <td className="px-5 py-3">
                         <p className="font-semibold text-slate-900 dark:text-slate-100">
-                          {emp.name}
+                          {emp.name} {!emp.active && <span className="text-[10px] text-rose-600">(Inactive)</span>}
                         </p>
                         <p className="font-mono text-[11px] text-slate-500 dark:text-slate-400">
                           {emp.email}
@@ -773,7 +1119,7 @@ export const ModuleWorkspace: React.FC<ModuleWorkspaceProps> = ({
                                 : 'bg-slate-100 text-slate-600 dark:bg-slate-800 dark:text-slate-300'
                             }`}
                           >
-                            {emp.clockedIn ? 'Clocked In' : 'Clocked Out'}
+                            {emp.clockedIn ? 'Clocked In' : 'Clocked Out'} · {loggedHours}h logged
                           </span>
                           {canProvisionStaff && (
                             <button
@@ -818,11 +1164,38 @@ export const ModuleWorkspace: React.FC<ModuleWorkspaceProps> = ({
                         {revealPins ? emp.pinCode : '••••'}
                       </td>
                       <td className="px-5 py-3 text-right font-mono tabular-nums">
-                        {emp.permissions.maxDiscountPct}%
+                        <div>{formatMoney(emp.grossSalary, business.currency)}</div>
+                        <div className="text-[10px] text-slate-400">
+                          Max Disc: {emp.permissions.maxDiscountPct}%
+                        </div>
                       </td>
                       <td className="px-5 py-3 text-[11px] text-slate-600 dark:text-slate-300">
                         {capabilities || 'Standard Checkout'}
                       </td>
+                      {canProvisionStaff && (
+                        <td className="px-5 py-3 text-right">
+                          <div className="inline-flex items-center gap-1.5">
+                            <button
+                              type="button"
+                              onClick={() => setEditingEmp({ ...emp })}
+                              className="inline-flex items-center gap-1 rounded border border-slate-200 px-2 py-1 text-[11px] font-medium text-slate-700 hover:bg-slate-100 dark:border-slate-700 dark:text-slate-200"
+                            >
+                              <Edit3 className="h-3 w-3" />
+                              <span>Edit</span>
+                            </button>
+                            {emp.role !== 'Owner' && (
+                              <button
+                                type="button"
+                                onClick={() => onDeleteEmployee(emp.id)}
+                                title="Remove employee"
+                                className="rounded border border-rose-200 p-1 text-rose-600 hover:bg-rose-50 dark:border-rose-900 dark:hover:bg-rose-950/40"
+                              >
+                                <Trash2 className="h-3 w-3" />
+                              </button>
+                            )}
+                          </div>
+                        </td>
+                      )}
                     </tr>
                   );
                 })}
@@ -830,6 +1203,139 @@ export const ModuleWorkspace: React.FC<ModuleWorkspaceProps> = ({
             </table>
           </div>
         </section>
+
+        {/* Edit Employee Modal */}
+        {editingEmp && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/60 p-4 backdrop-blur-xs">
+            <div className="w-full max-w-md rounded-xl border border-slate-200 bg-white p-6 shadow-xl dark:border-slate-800 dark:bg-slate-900">
+              <div className="flex items-center justify-between border-b border-slate-200 pb-3 dark:border-slate-800">
+                <h3 className="font-display text-sm font-bold text-slate-900 dark:text-slate-100">
+                  Edit Staff Member · {editingEmp.name}
+                </h3>
+                <button
+                  type="button"
+                  onClick={() => setEditingEmp(null)}
+                  className="rounded p-1 text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800"
+                >
+                  <X className="h-4 w-4" />
+                </button>
+              </div>
+              <form
+                onSubmit={async (e) => {
+                  e.preventDefault();
+                  await onUpdateEmployee(editingEmp.id, {
+                    name: editingEmp.name,
+                    role: editingEmp.role,
+                    branchId: editingEmp.branchId,
+                    grossSalary: editingEmp.grossSalary,
+                    pinCode: editingEmp.pinCode,
+                    active: editingEmp.active,
+                  });
+                  setEditingEmp(null);
+                  setEmpCreatedMsg(`Updated staff profile for ${editingEmp.name}.`);
+                  setTimeout(() => setEmpCreatedMsg(''), 3500);
+                }}
+                className="mt-4 space-y-3 text-xs"
+              >
+                <input
+                  type="text"
+                  required
+                  value={editingEmp.name}
+                  onChange={(e) =>
+                    setEditingEmp((p) => (p ? { ...p, name: e.target.value } : p))
+                  }
+                  placeholder="Full Name"
+                  className="w-full rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-slate-900 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-100"
+                />
+                <div className="grid grid-cols-2 gap-2">
+                  <select
+                    value={editingEmp.role}
+                    onChange={(e) =>
+                      setEditingEmp((p) => (p ? { ...p, role: e.target.value as UserRole } : p))
+                    }
+                    className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-slate-900 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-100"
+                  >
+                    <option value="Owner">Owner</option>
+                    <option value="Store Manager">Store Manager</option>
+                    <option value="Cashier">Cashier</option>
+                    <option value="Inventory Clerk">Inventory Clerk</option>
+                    <option value="Accountant">Accountant</option>
+                    <option value="Field Agent">Field Agent</option>
+                  </select>
+                  <select
+                    value={editingEmp.branchId}
+                    onChange={(e) =>
+                      setEditingEmp((p) => (p ? { ...p, branchId: e.target.value } : p))
+                    }
+                    className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-slate-900 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-100"
+                  >
+                    {stores.map((s) => (
+                      <option key={s.id} value={s.id}>
+                        {s.name}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+                <div className="grid grid-cols-2 gap-2">
+                  <div>
+                    <label className="text-[10px] text-slate-500">Gross Salary ({business.currency})</label>
+                    <input
+                      type="number"
+                      min={0}
+                      value={editingEmp.grossSalary}
+                      onChange={(e) =>
+                        setEditingEmp((p) =>
+                          p ? { ...p, grossSalary: Math.max(0, Number(e.target.value) || 0) } : p
+                        )
+                      }
+                      className="mt-0.5 w-full rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 font-mono text-slate-900 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-100"
+                    />
+                  </div>
+                  <div>
+                    <label className="text-[10px] text-slate-500">POS PIN</label>
+                    <input
+                      type="text"
+                      maxLength={8}
+                      value={editingEmp.pinCode}
+                      onChange={(e) =>
+                        setEditingEmp((p) =>
+                          p ? { ...p, pinCode: e.target.value.replace(/[^0-9]/g, '') } : p
+                        )
+                      }
+                      className="mt-0.5 w-full rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 font-mono text-slate-900 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-100"
+                    />
+                  </div>
+                </div>
+                <label className="inline-flex items-center gap-2 text-slate-700 dark:text-slate-300">
+                  <input
+                    type="checkbox"
+                    checked={editingEmp.active}
+                    onChange={(e) =>
+                      setEditingEmp((p) => (p ? { ...p, active: e.target.checked } : p))
+                    }
+                    className="rounded border-slate-300 text-teal-700"
+                  />
+                  <span>Employee Active (Can log into POS with PIN)</span>
+                </label>
+                <div className="flex justify-end gap-2 pt-2">
+                  <button
+                    type="button"
+                    onClick={() => setEditingEmp(null)}
+                    className="rounded-lg border border-slate-200 px-4 py-2 font-medium text-slate-700 dark:border-slate-700 dark:text-slate-200"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    type="submit"
+                    className="rounded-lg bg-teal-700 px-4 py-2 font-semibold text-white hover:bg-teal-800"
+                  >
+                    Save Employee
+                  </button>
+                </div>
+              </form>
+            </div>
+          </div>
+        )}
 
         {/* Recent Shift Attendance Logs */}
         <section className="rounded-xl border border-slate-200 bg-white dark:border-slate-800 dark:bg-slate-900">
@@ -1002,27 +1508,47 @@ export const ModuleWorkspace: React.FC<ModuleWorkspaceProps> = ({
     );
   }
 
-  // Specialized Kenya Statutory Payroll Engine
+  // Specialized Kenya Statutory Payroll Engine (Real Staff Only, No Fake Fallback)
   if (module.id === 'payroll') {
-    const staffRows =
-      employees.length > 0
-        ? employees.map((e) => ({ name: e.name, role: e.role, gross: e.grossSalary }))
-        : [
-            { name: 'Amina Hassan', role: 'Regional Operations Director', gross: 185000 },
-            { name: 'Brian Ochieng', role: 'Field Sales & Van Agent', gross: 65000 },
-            { name: 'Wanjiku Kamau', role: 'Senior POS Cashier', gross: 48000 },
-          ];
+    const salariedStaff = employees.filter((e) => e.active && e.grossSalary > 0);
+    const bizRuns = payrollRuns.filter((r) => r.businessId === business.id);
+
+    const handleExecutePayroll = async (e: React.FormEvent) => {
+      e.preventDefault();
+      if (salariedStaff.length === 0) return;
+      setRunningPayroll(true);
+      setPayrollMsg('');
+      try {
+        const created = await onRunPayroll(payrollPeriod.trim());
+        if (created) {
+          setPayrollMsg(
+            `Executed ${created.periodLabel} payroll for ${created.employeeCount} staff (Net ${formatMoney(created.totalNet, created.currency)}) and posted GL journal to Accounting.`
+          );
+        }
+      } finally {
+        setRunningPayroll(false);
+      }
+    };
 
     return (
       <div className="space-y-6">
-        <div>
-          <h1 className="font-display text-2xl font-bold text-slate-900 dark:text-slate-100">
-            Kenya Statutory Payroll Engine (PAYE · SHIF · NSSF · Housing Levy)
-          </h1>
-          <p className="mt-1 text-sm text-slate-600 dark:text-slate-400">
-            Automated statutory deductions, P9 tax schedules, and M-Pesa B2C / bank disbursement ready.
-          </p>
+        <div className="flex flex-wrap items-end justify-between gap-3">
+          <div>
+            <h1 className="font-display text-2xl font-bold text-slate-900 dark:text-slate-100">
+              Kenya Statutory Payroll Engine (PAYE · SHIF · NSSF · Housing Levy)
+            </h1>
+            <p className="mt-1 text-sm text-slate-600 dark:text-slate-400">
+              2025/2026 KRA statutory rates (SHIF 2.75% min 300, NSSF 6% capped KES 4,320, Housing Levy 1.5%, PAYE − KES 2,400 relief) synced to Accounting GL.
+            </p>
+          </div>
         </div>
+
+        {payrollMsg && (
+          <div className="flex items-center gap-2 rounded-lg border border-emerald-200 bg-emerald-50 px-4 py-2.5 text-xs font-medium text-emerald-800 dark:border-emerald-900 dark:bg-emerald-950/40 dark:text-emerald-300">
+            <CheckCircle2 className="h-4 w-4" />
+            <span>{payrollMsg}</span>
+          </div>
+        )}
 
         {/* Interactive Calculator */}
         <section className="grid grid-cols-1 gap-6 rounded-xl border border-slate-200 bg-white p-5 lg:grid-cols-12 dark:border-slate-800 dark:bg-slate-900">
@@ -1041,90 +1567,262 @@ export const ModuleWorkspace: React.FC<ModuleWorkspaceProps> = ({
                 className="mt-1.5 w-full rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 font-mono text-sm font-semibold text-slate-900 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-100"
               />
             </label>
+            <p className="font-mono text-[11px] text-slate-500">
+              Taxable Pay: {formatMoney(payrollBreakdown.taxablePay, business.currency)}
+            </p>
           </div>
 
           <div className="grid grid-cols-2 gap-4 sm:grid-cols-3 lg:col-span-8">
             <div>
               <p className="text-xs text-slate-500 dark:text-slate-400">PAYE (Net of Relief)</p>
               <p className="mt-1 font-mono text-lg font-semibold tabular-nums text-slate-900 dark:text-slate-100">
-                {formatMoney(payrollBreakdown.paye, 'KES')}
+                {formatMoney(payrollBreakdown.paye, business.currency)}
               </p>
             </div>
             <div>
               <p className="text-xs text-slate-500 dark:text-slate-400">SHIF (2.75%)</p>
               <p className="mt-1 font-mono text-lg font-semibold tabular-nums text-slate-900 dark:text-slate-100">
-                {formatMoney(payrollBreakdown.shif, 'KES')}
+                {formatMoney(payrollBreakdown.shif, business.currency)}
               </p>
             </div>
             <div>
-              <p className="text-xs text-slate-500 dark:text-slate-400">NSSF (Tier I & II)</p>
+              <p className="text-xs text-slate-500 dark:text-slate-400">NSSF (Tier I &amp; II)</p>
               <p className="mt-1 font-mono text-lg font-semibold tabular-nums text-slate-900 dark:text-slate-100">
-                {formatMoney(payrollBreakdown.nssf, 'KES')}
+                {formatMoney(payrollBreakdown.nssf, business.currency)}
               </p>
             </div>
             <div>
               <p className="text-xs text-slate-500 dark:text-slate-400">Housing Levy (1.5%)</p>
               <p className="mt-1 font-mono text-lg font-semibold tabular-nums text-slate-900 dark:text-slate-100">
-                {formatMoney(payrollBreakdown.housingLevy, 'KES')}
+                {formatMoney(payrollBreakdown.housingLevy, business.currency)}
               </p>
             </div>
             <div>
               <p className="text-xs text-slate-500 dark:text-slate-400">Total Deductions</p>
               <p className="mt-1 font-mono text-lg font-semibold tabular-nums text-rose-700 dark:text-rose-400">
-                {formatMoney(payrollBreakdown.totalDeductions, 'KES')}
+                {formatMoney(payrollBreakdown.totalDeductions, business.currency)}
               </p>
             </div>
             <div>
               <p className="text-xs text-slate-500 dark:text-slate-400">Net Take-Home Pay</p>
               <p className="mt-1 font-mono text-lg font-bold tabular-nums text-teal-700 dark:text-teal-400">
-                {formatMoney(payrollBreakdown.netPay, 'KES')}
+                {formatMoney(payrollBreakdown.netPay, business.currency)}
               </p>
             </div>
           </div>
         </section>
 
-        {/* Staff Payroll Schedule */}
+        {/* Staff Payroll Schedule + Run Payroll */}
         <section className="rounded-xl border border-slate-200 bg-white dark:border-slate-800 dark:bg-slate-900">
-          <div className="overflow-x-auto">
-            <table className="w-full text-left text-xs">
-              <thead>
-                <tr className="border-b border-slate-200 text-slate-500 dark:border-slate-800 dark:text-slate-400">
-                  <th className="px-5 py-3 font-medium">Employee</th>
-                  <th className="px-5 py-3 font-medium">Role</th>
-                  <th className="px-5 py-3 text-right font-medium">Gross Pay</th>
-                  <th className="px-5 py-3 text-right font-medium">PAYE</th>
-                  <th className="px-5 py-3 text-right font-medium">SHIF + AHL + NSSF</th>
-                  <th className="px-5 py-3 text-right font-medium">Net Pay</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
-                {staffRows.map((emp) => {
-                  const p = calculateKenyaPayroll(emp.gross);
-                  return (
-                    <tr key={emp.name} className="hover:bg-slate-50 dark:hover:bg-slate-800/40">
-                      <td className="px-5 py-3 font-semibold text-slate-900 dark:text-slate-100">
-                        {emp.name}
-                      </td>
-                      <td className="px-5 py-3 text-slate-600 dark:text-slate-300">{emp.role}</td>
-                      <td className="px-5 py-3 text-right font-mono tabular-nums">
-                        {formatMoney(p.grossSalary, 'KES')}
-                      </td>
-                      <td className="px-5 py-3 text-right font-mono tabular-nums">
-                        {formatMoney(p.paye, 'KES')}
-                      </td>
-                      <td className="px-5 py-3 text-right font-mono tabular-nums">
-                        {formatMoney(p.shif + p.housingLevy + p.nssf, 'KES')}
-                      </td>
-                      <td className="px-5 py-3 text-right font-mono font-bold tabular-nums text-teal-700 dark:text-teal-400">
-                        {formatMoney(p.netPay, 'KES')}
-                      </td>
-                    </tr>
-                  );
-                })}
-              </tbody>
-            </table>
+          <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-200 px-5 py-3.5 dark:border-slate-800">
+            <h2 className="font-display text-sm font-semibold text-slate-900 dark:text-slate-100">
+              Active Salaried Staff Schedule ({salariedStaff.length})
+            </h2>
+            <form onSubmit={handleExecutePayroll} className="flex flex-wrap items-center gap-2">
+              <input
+                type="text"
+                required
+                value={payrollPeriod}
+                onChange={(e) => setPayrollPeriod(e.target.value)}
+                placeholder="Period (e.g. Nov 2026)"
+                className="w-36 rounded-lg border border-slate-200 bg-slate-50 px-3 py-1.5 text-xs text-slate-900 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-100"
+              />
+              <button
+                type="submit"
+                disabled={salariedStaff.length === 0 || runningPayroll}
+                className="rounded-lg bg-teal-700 px-4 py-1.5 text-xs font-semibold text-white hover:bg-teal-800 disabled:opacity-40 dark:bg-teal-600"
+              >
+                {runningPayroll ? 'Posting Run...' : 'Execute Monthly Payroll Run'}
+              </button>
+            </form>
           </div>
+
+          {salariedStaff.length === 0 ? (
+            <div className="p-10 text-center">
+              <Users className="mx-auto h-7 w-7 text-slate-300 dark:text-slate-600" />
+              <p className="mt-2 text-sm font-medium text-slate-800 dark:text-slate-200">
+                No active salaried employees configured for {business.name}
+              </p>
+              <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">
+                Add employees with a monthly Gross Salary in the Employees module to run payroll.
+              </p>
+            </div>
+          ) : (
+            <div className="overflow-x-auto">
+              <table className="w-full text-left text-xs">
+                <thead>
+                  <tr className="border-b border-slate-200 text-slate-500 dark:border-slate-800 dark:text-slate-400">
+                    <th className="px-5 py-3 font-medium">Employee</th>
+                    <th className="px-5 py-3 font-medium">Role</th>
+                    <th className="px-5 py-3 text-right font-medium">Gross Pay</th>
+                    <th className="px-5 py-3 text-right font-medium">PAYE</th>
+                    <th className="px-5 py-3 text-right font-medium">SHIF + AHL + NSSF</th>
+                    <th className="px-5 py-3 text-right font-medium">Net Pay</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
+                  {salariedStaff.map((emp) => {
+                    const p = calculateKenyaPayroll(emp.grossSalary);
+                    return (
+                      <tr key={emp.id} className="hover:bg-slate-50 dark:hover:bg-slate-800/40">
+                        <td className="px-5 py-3 font-semibold text-slate-900 dark:text-slate-100">
+                          {emp.name}
+                        </td>
+                        <td className="px-5 py-3 text-slate-600 dark:text-slate-300">{emp.role}</td>
+                        <td className="px-5 py-3 text-right font-mono tabular-nums">
+                          {formatMoney(p.grossSalary, business.currency)}
+                        </td>
+                        <td className="px-5 py-3 text-right font-mono tabular-nums">
+                          {formatMoney(p.paye, business.currency)}
+                        </td>
+                        <td className="px-5 py-3 text-right font-mono tabular-nums">
+                          {formatMoney(p.shif + p.housingLevy + p.nssf, business.currency)}
+                        </td>
+                        <td className="px-5 py-3 text-right font-mono font-bold tabular-nums text-teal-700 dark:text-teal-400">
+                          {formatMoney(p.netPay, business.currency)}
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          )}
         </section>
+
+        {/* Historical Posted Payroll Runs & Printable Payslips */}
+        {bizRuns.length > 0 && (
+          <section className="rounded-xl border border-slate-200 bg-white dark:border-slate-800 dark:bg-slate-900">
+            <div className="border-b border-slate-200 px-5 py-3.5 dark:border-slate-800">
+              <h2 className="font-display text-sm font-semibold text-slate-900 dark:text-slate-100">
+                Posted Payroll Runs &amp; Payslips ({bizRuns.length})
+              </h2>
+            </div>
+            <div className="divide-y divide-slate-100 dark:divide-slate-800">
+              {bizRuns.map((run) => (
+                <div key={run.id} className="space-y-3 px-5 py-4 text-xs">
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <div>
+                      <p className="font-bold text-slate-900 dark:text-slate-100">
+                        {run.periodLabel} · {run.employeeCount} Staff
+                      </p>
+                      <p className="font-mono text-[11px] text-slate-500">
+                        Gross: {formatMoney(run.totalGross, run.currency)} · PAYE:{' '}
+                        {formatMoney(run.totalPaye, run.currency)} · Employer Cost:{' '}
+                        {formatMoney(run.totalEmployerCost, run.currency)}
+                      </p>
+                    </div>
+                    <div className="text-right font-mono">
+                      <p className="font-bold text-teal-700 dark:text-teal-400">
+                        Net Disbursed: {formatMoney(run.totalNet, run.currency)}
+                      </p>
+                      <p className="text-[10px] text-emerald-700 dark:text-emerald-400">
+                        {run.status} · {new Date(run.createdAt).toLocaleDateString()}
+                      </p>
+                    </div>
+                  </div>
+                  <div className="flex flex-wrap gap-2">
+                    {run.payslips.map((slip) => (
+                      <button
+                        key={slip.employeeId}
+                        type="button"
+                        onClick={() => setPreviewPayslip({ runPeriod: run.periodLabel, slip })}
+                        className="inline-flex items-center gap-1 rounded border border-slate-200 bg-slate-50 px-2.5 py-1 text-[11px] font-medium text-slate-700 hover:border-teal-600 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-200"
+                      >
+                        <Printer className="h-3 w-3 text-teal-700 dark:text-teal-400" />
+                        <span>
+                          {slip.employeeName} ({formatMoney(slip.netPay, run.currency)})
+                        </span>
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              ))}
+            </div>
+          </section>
+        )}
+
+        {/* Printable A4 Payslip Modal */}
+        {previewPayslip && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/60 p-4 backdrop-blur-xs">
+            <div className="w-full max-w-lg rounded-xl border border-slate-200 bg-white p-6 shadow-xl dark:border-slate-800 dark:bg-slate-900">
+              <div className="no-print mb-4 flex items-center justify-between border-b border-slate-200 pb-3 dark:border-slate-800">
+                <h3 className="font-display text-sm font-bold text-slate-900 dark:text-slate-100">
+                  Employee Payslip · {previewPayslip.runPeriod}
+                </h3>
+                <div className="flex items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={() => window.print()}
+                    className="inline-flex items-center gap-1.5 rounded-lg bg-teal-700 px-3 py-1.5 text-xs font-semibold text-white hover:bg-teal-800"
+                  >
+                    <Printer className="h-3.5 w-3.5" />
+                    <span>Print Payslip</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setPreviewPayslip(null)}
+                    className="rounded p-1 text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800"
+                  >
+                    <X className="h-4 w-4" />
+                  </button>
+                </div>
+              </div>
+
+              <div
+                id="misafa-printable-document"
+                className="space-y-4 rounded-lg border border-slate-200 bg-white p-6 text-xs text-slate-900"
+              >
+                <div className="flex justify-between border-b border-slate-200 pb-3">
+                  <div>
+                    <h2 className="font-display text-lg font-bold uppercase">{business.name}</h2>
+                    <p className="font-mono text-[11px]">Employer KRA PIN: {business.taxPin}</p>
+                  </div>
+                  <div className="text-right font-mono">
+                    <p className="font-bold">PAYSLIP</p>
+                    <p>{previewPayslip.runPeriod}</p>
+                  </div>
+                </div>
+                <div className="rounded border border-slate-200 bg-slate-50 p-3">
+                  <p className="font-bold">{previewPayslip.slip.employeeName}</p>
+                  <p>{previewPayslip.slip.role}</p>
+                </div>
+                <div className="space-y-1.5 font-mono tabular-nums">
+                  <div className="flex justify-between">
+                    <span>Basic / Gross Salary</span>
+                    <span className="font-semibold">
+                      {formatMoney(previewPayslip.slip.grossSalary, business.currency)}
+                    </span>
+                  </div>
+                  <div className="flex justify-between text-slate-600">
+                    <span>NSSF Tier I &amp; II (6%)</span>
+                    <span>-{formatMoney(previewPayslip.slip.nssf, business.currency)}</span>
+                  </div>
+                  <div className="flex justify-between text-slate-600">
+                    <span>SHIF (2.75%)</span>
+                    <span>-{formatMoney(previewPayslip.slip.shif, business.currency)}</span>
+                  </div>
+                  <div className="flex justify-between text-slate-600">
+                    <span>Affordable Housing Levy (1.5%)</span>
+                    <span>-{formatMoney(previewPayslip.slip.housingLevy, business.currency)}</span>
+                  </div>
+                  <div className="flex justify-between text-slate-600">
+                    <span>Taxable Pay</span>
+                    <span>{formatMoney(previewPayslip.slip.taxablePay, business.currency)}</span>
+                  </div>
+                  <div className="flex justify-between text-slate-600">
+                    <span>PAYE Tax (Net of Relief)</span>
+                    <span>-{formatMoney(previewPayslip.slip.paye, business.currency)}</span>
+                  </div>
+                  <div className="flex justify-between border-t border-slate-300 pt-2 text-sm font-bold text-teal-800">
+                    <span>NET TAKE-HOME PAY</span>
+                    <span>{formatMoney(previewPayslip.slip.netPay, business.currency)}</span>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
       </div>
     );
   }

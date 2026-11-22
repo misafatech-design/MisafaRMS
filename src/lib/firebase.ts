@@ -9,6 +9,7 @@ import {
 } from 'firebase/auth';
 import {
   collection,
+  deleteDoc,
   doc,
   getDoc,
   getDocFromServer,
@@ -107,6 +108,7 @@ export async function signOutFirebase(): Promise<void> {
 
 export {
   collection,
+  deleteDoc,
   doc,
   getDoc,
   getDocs,

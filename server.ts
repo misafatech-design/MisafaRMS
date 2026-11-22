@@ -14,9 +14,14 @@ import {
   SEED_ATTENDANCE_LOGS,
   SEED_AUDIT_LOGS,
   SEED_AUTOMATIONS,
+  SEED_BACKUPS,
   SEED_BUSINESSES,
+  SEED_CRM_LEADS,
   SEED_EMPLOYEES,
   SEED_ERP_RECORDS,
+  SEED_INVOICES,
+  SEED_ONLINE_ORDERS,
+  SEED_PAYROLL_RUNS,
   SEED_PLATFORM_USERS,
   SEED_PRODUCTS,
   SEED_STORES,
@@ -26,9 +31,15 @@ import {
 } from './src/data/seedData';
 import {
   AuditLogEntry,
+  BackupSnapshot,
   BusinessEntity,
+  CrmCustomerLead,
   EmployeeRecord,
   ErpRecord,
+  OnlineOrder,
+  OnlineOrderFulfillmentStatus,
+  PayrollRunPayslip,
+  PayrollRunRecord,
   PlatformBillingGateway,
   PlatformUserRecord,
   ProductItem,
@@ -40,6 +51,7 @@ import {
   SubscriptionInvoice,
   SubscriptionPlanId,
   SubscriptionPlanTier,
+  TaxInvoiceRecord,
   UserRole,
   WorkflowAutomation,
 } from './src/types/erp';
@@ -77,6 +89,11 @@ interface ServerDatabase {
   attendanceLogs: ShiftAttendanceLog[];
   products: ProductItem[];
   transactions: SaleTransaction[];
+  onlineOrders: OnlineOrder[];
+  invoices: TaxInvoiceRecord[];
+  crmLeads: CrmCustomerLead[];
+  payrollRuns: PayrollRunRecord[];
+  backups: BackupSnapshot[];
   studioModels: StudioModel[];
   automations: WorkflowAutomation[];
   auditLogs: AuditLogEntry[];
@@ -89,24 +106,139 @@ interface ServerDatabase {
   activeSessions: Map<string, { actor: string; role: UserRole; isSuperAdmin: boolean; issuedAt: string }>;
 }
 
-const db: ServerDatabase = {
-  businesses: structuredClone(SEED_BUSINESSES),
-  stores: structuredClone(SEED_STORES),
-  employees: structuredClone(SEED_EMPLOYEES),
-  attendanceLogs: structuredClone(SEED_ATTENDANCE_LOGS),
-  products: structuredClone(SEED_PRODUCTS),
-  transactions: structuredClone(SEED_TRANSACTIONS),
-  studioModels: structuredClone(SEED_STUDIO_MODELS),
-  automations: structuredClone(SEED_AUTOMATIONS),
-  auditLogs: structuredClone(SEED_AUDIT_LOGS),
-  erpRecords: structuredClone(SEED_ERP_RECORDS),
-  platformUsers: structuredClone(SEED_PLATFORM_USERS),
-  subscriptionPlans: structuredClone(DEFAULT_SUBSCRIPTION_PLANS),
-  platformBillingGateways: structuredClone(DEFAULT_PLATFORM_BILLING_GATEWAYS),
-  subscriptionInvoices: structuredClone(SEED_SUBSCRIPTION_INVOICES),
-  platformGatewaySecrets: new Map(),
-  activeSessions: new Map(),
-};
+const DATA_DIR = path.resolve(process.cwd(), '.data');
+const STATE_FILE = path.join(DATA_DIR, 'misafarms-state.json');
+
+function createSeedDatabase(): ServerDatabase {
+  return {
+    businesses: structuredClone(SEED_BUSINESSES),
+    stores: structuredClone(SEED_STORES),
+    employees: structuredClone(SEED_EMPLOYEES),
+    attendanceLogs: structuredClone(SEED_ATTENDANCE_LOGS),
+    products: structuredClone(SEED_PRODUCTS),
+    transactions: structuredClone(SEED_TRANSACTIONS),
+    onlineOrders: structuredClone(SEED_ONLINE_ORDERS),
+    invoices: structuredClone(SEED_INVOICES),
+    crmLeads: structuredClone(SEED_CRM_LEADS),
+    payrollRuns: structuredClone(SEED_PAYROLL_RUNS),
+    backups: structuredClone(SEED_BACKUPS),
+    studioModels: structuredClone(SEED_STUDIO_MODELS),
+    automations: structuredClone(SEED_AUTOMATIONS),
+    auditLogs: structuredClone(SEED_AUDIT_LOGS),
+    erpRecords: structuredClone(SEED_ERP_RECORDS),
+    platformUsers: structuredClone(SEED_PLATFORM_USERS),
+    subscriptionPlans: structuredClone(DEFAULT_SUBSCRIPTION_PLANS),
+    platformBillingGateways: structuredClone(DEFAULT_PLATFORM_BILLING_GATEWAYS),
+    subscriptionInvoices: structuredClone(SEED_SUBSCRIPTION_INVOICES),
+    platformGatewaySecrets: new Map(),
+    activeSessions: new Map(),
+  };
+}
+
+function loadDatabase(): ServerDatabase {
+  const initial = createSeedDatabase();
+  try {
+    if (!fs.existsSync(STATE_FILE)) return initial;
+    const raw = fs.readFileSync(STATE_FILE, 'utf8');
+    const parsed = JSON.parse(raw) as Record<string, unknown>;
+    return {
+      businesses: Array.isArray(parsed.businesses) ? (parsed.businesses as BusinessEntity[]) : initial.businesses,
+      stores: Array.isArray(parsed.stores) ? (parsed.stores as StoreBranch[]) : initial.stores,
+      employees: Array.isArray(parsed.employees) ? (parsed.employees as EmployeeRecord[]) : initial.employees,
+      attendanceLogs: Array.isArray(parsed.attendanceLogs) ? (parsed.attendanceLogs as ShiftAttendanceLog[]) : initial.attendanceLogs,
+      products: Array.isArray(parsed.products) ? (parsed.products as ProductItem[]) : initial.products,
+      transactions: Array.isArray(parsed.transactions) ? (parsed.transactions as SaleTransaction[]) : initial.transactions,
+      onlineOrders: Array.isArray(parsed.onlineOrders) ? (parsed.onlineOrders as OnlineOrder[]) : initial.onlineOrders,
+      invoices: Array.isArray(parsed.invoices) ? (parsed.invoices as TaxInvoiceRecord[]) : initial.invoices,
+      crmLeads: Array.isArray(parsed.crmLeads) ? (parsed.crmLeads as CrmCustomerLead[]) : initial.crmLeads,
+      payrollRuns: Array.isArray(parsed.payrollRuns) ? (parsed.payrollRuns as PayrollRunRecord[]) : initial.payrollRuns,
+      backups: Array.isArray(parsed.backups) ? (parsed.backups as BackupSnapshot[]) : initial.backups,
+      studioModels: Array.isArray(parsed.studioModels) ? (parsed.studioModels as StudioModel[]) : initial.studioModels,
+      automations: Array.isArray(parsed.automations) ? (parsed.automations as WorkflowAutomation[]) : initial.automations,
+      auditLogs: Array.isArray(parsed.auditLogs) ? (parsed.auditLogs as AuditLogEntry[]) : initial.auditLogs,
+      erpRecords: Array.isArray(parsed.erpRecords) ? (parsed.erpRecords as ErpRecord[]) : initial.erpRecords,
+      platformUsers: Array.isArray(parsed.platformUsers) ? (parsed.platformUsers as PlatformUserRecord[]) : initial.platformUsers,
+      subscriptionPlans: Array.isArray(parsed.subscriptionPlans) ? (parsed.subscriptionPlans as SubscriptionPlanTier[]) : initial.subscriptionPlans,
+      platformBillingGateways: Array.isArray(parsed.platformBillingGateways) ? (parsed.platformBillingGateways as PlatformBillingGateway[]) : initial.platformBillingGateways,
+      subscriptionInvoices: Array.isArray(parsed.subscriptionInvoices) ? (parsed.subscriptionInvoices as SubscriptionInvoice[]) : initial.subscriptionInvoices,
+      platformGatewaySecrets: new Map(
+        Array.isArray(parsed.platformGatewaySecrets) ? (parsed.platformGatewaySecrets as Array<[string, { consumerKey?: string; secretConfiguredAt: string }]>) : []
+      ),
+      activeSessions: new Map(
+        Array.isArray(parsed.activeSessions) ? (parsed.activeSessions as Array<[string, { actor: string; role: UserRole; isSuperAdmin: boolean; issuedAt: string }]>) : []
+      ),
+    };
+  } catch (err) {
+    console.warn('Could not load saved MisafaRMS state, starting from seed:', err);
+    return initial;
+  }
+}
+
+const db: ServerDatabase = loadDatabase();
+
+function saveDatabase() {
+  try {
+    if (!fs.existsSync(DATA_DIR)) {
+      fs.mkdirSync(DATA_DIR, { recursive: true });
+    }
+    const serializable = {
+      ...db,
+      platformGatewaySecrets: Array.from(db.platformGatewaySecrets.entries()),
+      activeSessions: Array.from(db.activeSessions.entries()).slice(-100),
+    };
+    fs.writeFileSync(STATE_FILE, JSON.stringify(serializable, null, 2), 'utf8');
+  } catch (err) {
+    console.error('Failed to persist MisafaRMS state:', err);
+  }
+}
+
+function computeServerKenyaPayroll(grossSalary: number) {
+  const gross = Math.max(0, Number(grossSalary) || 0);
+  const pensionablePay = Math.min(gross, 72000);
+  const nssf = Math.round(pensionablePay * 0.06 * 100) / 100;
+  const shif = gross > 0 ? Math.max(300, Math.round(gross * 0.0275 * 100) / 100) : 0;
+  const housingLevy = Math.round(gross * 0.015 * 100) / 100;
+  const taxablePay = Math.max(0, Math.round((gross - nssf - shif - housingLevy) * 100) / 100);
+
+  let remaining = taxablePay;
+  let grossTax = 0;
+  const band1 = Math.min(remaining, 24000);
+  grossTax += band1 * 0.1;
+  remaining -= band1;
+  if (remaining > 0) {
+    const band2 = Math.min(remaining, 8333);
+    grossTax += band2 * 0.25;
+    remaining -= band2;
+  }
+  if (remaining > 0) {
+    const band3 = Math.min(remaining, 467667);
+    grossTax += band3 * 0.3;
+    remaining -= band3;
+  }
+  if (remaining > 0) {
+    const band4 = Math.min(remaining, 300000);
+    grossTax += band4 * 0.325;
+    remaining -= band4;
+  }
+  if (remaining > 0) {
+    grossTax += remaining * 0.35;
+  }
+
+  const paye = gross > 0 ? Math.max(0, Math.round((grossTax - 2400) * 100) / 100) : 0;
+  const totalDeductions = Math.round((paye + shif + nssf + housingLevy) * 100) / 100;
+  const netPay = Math.max(0, Math.round((gross - totalDeductions) * 100) / 100);
+  return {
+    grossSalary: gross,
+    nssf,
+    shif,
+    housingLevy,
+    taxablePay,
+    paye,
+    totalDeductions,
+    netPay,
+    employerTotal: Math.round((gross + nssf + housingLevy) * 100) / 100,
+  };
+}
 
 function computeAuditHash(entry: Omit<AuditLogEntry, 'hashPrefix'>): string {
   const prevHash = db.auditLogs[0]?.hashPrefix || 'genesis';
@@ -287,6 +419,11 @@ async function startServer() {
       attendanceLogs: db.attendanceLogs,
       products: db.products,
       transactions: db.transactions,
+      onlineOrders: db.onlineOrders,
+      invoices: db.invoices,
+      crmLeads: db.crmLeads,
+      payrollRuns: db.payrollRuns,
+      backups: db.backups,
       studioModels: db.studioModels,
       automations: db.automations,
       auditLogs: db.auditLogs,
@@ -324,6 +461,9 @@ async function startServer() {
     )
       ? req.body.subscriptionPlan
       : 'Trial';
+    const setupMode: 'clean' | 'starter' = req.body?.setupMode === 'starter' ? 'starter' : 'clean';
+    const ownerPin = sanitizeText(req.body?.ownerPin, 8).replace(/[^0-9]/g, '') || '1234';
+    const ecommerceEnabled = Boolean(req.body?.ecommerceEnabled);
     const planMeta =
       db.subscriptionPlans.find((p) => p.id === requestedPlan) || db.subscriptionPlans[0];
 
@@ -350,6 +490,29 @@ async function startServer() {
       .toISOString()
       .slice(0, 10);
 
+    // Real businesses in 'clean' mode start with payment gateways disabled until configured,
+    // zero fake promos, and zero fake tables/shelves.
+    const initialGateways =
+      setupMode === 'starter'
+        ? structuredClone(DEFAULT_PAYMENT_GATEWAYS)
+        : structuredClone(DEFAULT_PAYMENT_GATEWAYS).map((gw) => ({
+            ...gw,
+            enabled: false,
+            shortcodeOrTill: gw.mode === 'Cash Drawer' ? 'DRAWER-01' : '',
+          }));
+
+    const initialLayout =
+      setupMode === 'starter'
+        ? structuredClone(DEFAULT_LAYOUT_CONFIG)
+        : {
+            layoutMode: 'retail_shelves' as const,
+            zoneLabel: 'Store Section',
+            slotLabel: 'Shelf / Rack',
+            autoMarkTableNeedsClearing: false,
+            showShelfOnPosTile: true,
+            zones: [],
+          };
+
     const newBiz: BusinessEntity = {
       id: bizId,
       ownerName,
@@ -369,6 +532,12 @@ async function startServer() {
       monthlyFee: planMeta.monthlyPriceKes,
       branchLimit: planMeta.branchLimit,
       subscriptionRenewsAt: renewsAt,
+      ecommerceEnabled,
+      dnsToken: `misafa-verify=${crypto.randomBytes(5).toString('hex')}`,
+      storefrontTagline: `${name} — Official Storefront`,
+      deliveryFee: 0,
+      freeDeliveryAbove: 0,
+      storefrontPickupEnabled: true,
       installedModuleIds: [
         'pos',
         'pos_settings',
@@ -387,13 +556,19 @@ async function startServer() {
         'security',
         'studio',
         'ecommerce',
+        'online_orders',
         'website',
+        'backups',
       ],
-      posConfig: structuredClone(DEFAULT_POS_CONFIG),
-      paymentGateways: structuredClone(DEFAULT_PAYMENT_GATEWAYS),
-      layoutConfig: structuredClone(DEFAULT_LAYOUT_CONFIG),
-      catalogTaxonomy: structuredClone(DEFAULT_CATALOG_TAXONOMY),
-      offers: structuredClone(DEFAULT_PROMO_OFFERS),
+      posConfig: {
+        ...structuredClone(DEFAULT_POS_CONFIG),
+        receiptHeader: `${name.toUpperCase()} · ${etimsEnabled ? 'KRA eTIMS FISCAL RECEIPT' : 'OFFICIAL RECEIPT'}`,
+        receiptFooter: `Thank you for shopping at ${name}.`,
+      },
+      paymentGateways: initialGateways,
+      layoutConfig: initialLayout,
+      catalogTaxonomy: setupMode === 'starter' ? structuredClone(DEFAULT_CATALOG_TAXONOMY) : [],
+      offers: setupMode === 'starter' ? structuredClone(DEFAULT_PROMO_OFFERS) : [],
       createdAt: now.toISOString(),
     };
 
@@ -411,19 +586,20 @@ async function startServer() {
       isActive: true,
     };
 
+    // Only provision the actual business Owner / Admin (no fake staff in clean mode)
     const starterEmployees: EmployeeRecord[] = [
       {
         id: `emp-${crypto.randomUUID().slice(0, 8)}`,
         businessId: bizId,
-        name: sanitizeText(req.body?.ownerName, 80) || 'Business Admin',
-        email: sanitizeText(req.body?.ownerEmail, 120) || `admin@${slug}.misafarms.com`,
-        role: 'Store Manager',
-        pinCode: '1234',
+        name: ownerName,
+        email: ownerEmail || `admin@${slug}.misafarms.com`,
+        role: 'Owner',
+        pinCode: ownerPin.length >= 4 ? ownerPin : '1234',
         branchId: storeId,
-        grossSalary: 120000,
+        grossSalary: 0,
         active: true,
         permissions: {
-          maxDiscountPct: 25,
+          maxDiscountPct: 100,
           canVoidSale: true,
           canOpenDrawer: true,
           canViewCostPrice: true,
@@ -432,78 +608,30 @@ async function startServer() {
           canExportReports: true,
           canManagePayments: true,
         },
-        createdAt: new Date().toISOString(),
-      },
-      {
-        id: `emp-${crypto.randomUUID().slice(0, 8)}`,
-        businessId: bizId,
-        name: 'Front Desk Cashier',
-        email: `cashier@${slug}.misafarms.com`,
-        role: 'Cashier',
-        pinCode: '2026',
-        branchId: storeId,
-        grossSalary: 42000,
-        active: true,
-        permissions: {
-          maxDiscountPct: 5,
-          canVoidSale: false,
-          canOpenDrawer: true,
-          canViewCostPrice: false,
-          canEditInventory: false,
-          canViewEtims: false,
-          canExportReports: false,
-          canManagePayments: false,
-        },
-        createdAt: new Date().toISOString(),
+        createdAt: now.toISOString(),
       },
     ];
 
-    const starterProducts: ProductItem[] = [
-      {
-        id: `prod-${crypto.randomUUID().slice(0, 8)}`,
-        businessId: bizId,
-        sku: 'STR-COF-001',
-        barcode: `6169${Math.floor(10000000 + Math.random() * 89999999)}`,
-        name: 'Signature Roast Coffee 340g',
-        category: 'Beverages',
-        price: newBiz.currency === 'KES' ? 1200 : 14,
-        cost: newBiz.currency === 'KES' ? 750 : 7,
-        taxCode: 'B_16',
-        unit: 'Pouch',
-        reorderPoint: 15,
-        imageUrl: '/src/assets/images/pos_coffee_beans_1795366673842.jpg',
-        stockByStore: { [storeId]: 50 },
-      },
-      {
-        id: `prod-${crypto.randomUUID().slice(0, 8)}`,
-        businessId: bizId,
-        sku: 'STR-OIL-002',
-        barcode: `6169${Math.floor(10000000 + Math.random() * 89999999)}`,
-        name: 'Cold-Pressed Cooking Oil 500ml',
-        category: 'Pantry',
-        price: newBiz.currency === 'KES' ? 980 : 11,
-        cost: newBiz.currency === 'KES' ? 620 : 6,
-        taxCode: 'B_16',
-        unit: 'Bottle',
-        reorderPoint: 15,
-        imageUrl: '/src/assets/images/pos_olive_oil_1795366674395.jpg',
-        stockByStore: { [storeId]: 40 },
-      },
-      {
-        id: `prod-${crypto.randomUUID().slice(0, 8)}`,
-        businessId: bizId,
-        sku: 'STR-STA-003',
-        barcode: `6169${Math.floor(10000000 + Math.random() * 89999999)}`,
-        name: 'Essential Household Pack',
-        category: 'Staples',
-        price: newBiz.currency === 'KES' ? 250 : 4,
-        cost: newBiz.currency === 'KES' ? 190 : 2.5,
-        taxCode: 'E_0',
-        unit: 'Pack',
-        reorderPoint: 25,
-        stockByStore: { [storeId]: 120 },
-      },
-    ];
+    const starterProducts: ProductItem[] =
+      setupMode === 'starter'
+        ? [
+            {
+              id: `prod-${crypto.randomUUID().slice(0, 8)}`,
+              businessId: bizId,
+              sku: 'STR-COF-001',
+              barcode: `6169${Math.floor(10000000 + Math.random() * 89999999)}`,
+              name: 'Signature Roast Coffee 340g',
+              category: 'Beverages',
+              price: newBiz.currency === 'KES' ? 1200 : 14,
+              cost: newBiz.currency === 'KES' ? 750 : 7,
+              taxCode: 'B_16',
+              unit: 'Pouch',
+              reorderPoint: 15,
+              imageUrl: '/src/assets/images/pos_coffee_beans_1795366673842.jpg',
+              stockByStore: { [storeId]: 50 },
+            },
+          ]
+        : [];
 
     const ownerUser: PlatformUserRecord = {
       id: `usr-${crypto.randomUUID().slice(0, 8)}`,
@@ -542,19 +670,20 @@ async function startServer() {
     db.businesses.push(newBiz);
     db.stores.push(newStore);
     db.employees.push(...starterEmployees);
-    db.products.push(...starterProducts);
+    if (starterProducts.length > 0) db.products.push(...starterProducts);
     db.platformUsers.unshift(ownerUser);
     db.subscriptionInvoices.unshift(starterInvoice);
 
     appendAudit({
       actor: ownerName,
       role: 'Owner',
-      action: `Onboarded "${newBiz.name}" (misafarms.com/${slug}) on ${requestedPlan} plan with branch "${newStore.name}"`,
+      action: `Onboarded "${newBiz.name}" (misafarms.com/${slug}, mode=${setupMode}) on ${requestedPlan} plan`,
       module: 'Onboarding Wizard',
       storeName: newStore.name,
       emailNotified: true,
       recipientEmail: ownerEmail,
     });
+    saveDatabase();
 
     res.status(201).json({
       business: newBiz,
@@ -608,7 +737,65 @@ async function startServer() {
       module: 'Administration',
       storeName: 'Enterprise Global',
     });
+    saveDatabase();
 
+    res.json({ business: biz });
+  });
+
+  app.patch('/api/businesses/:id/domain', (req: Request, res: Response) => {
+    const biz = db.businesses.find((b) => b.id === req.params.id);
+    if (!biz) {
+      res.status(404).json({ error: 'Business not found.' });
+      return;
+    }
+
+    if (typeof req.body?.ecommerceEnabled === 'boolean') {
+      biz.ecommerceEnabled = req.body.ecommerceEnabled;
+    }
+    if (typeof req.body?.customDomain === 'string') {
+      const cleaned = req.body.customDomain
+        .trim()
+        .toLowerCase()
+        .replace(/^https?:\/\//, '')
+        .replace(/\/.*$/, '')
+        .slice(0, 120);
+      if (cleaned !== (biz.customDomain || '')) {
+        biz.customDomain = cleaned || undefined;
+        biz.domainVerified = false;
+        if (!biz.dnsToken) {
+          biz.dnsToken = `misafa-verify=${crypto.randomBytes(5).toString('hex')}`;
+        }
+      }
+    }
+    if (req.body?.verifyDomain === true && biz.customDomain) {
+      const validHost = /^[a-z0-9.-]+\.[a-z]{2,}$/i.test(biz.customDomain);
+      if (!validHost) {
+        res.status(400).json({ error: 'Enter a valid domain hostname (e.g. shop.giftmart.co.ke).' });
+        return;
+      }
+      biz.domainVerified = true;
+    }
+    if (typeof req.body?.storefrontTagline === 'string') {
+      biz.storefrontTagline = sanitizeText(req.body.storefrontTagline, 200);
+    }
+    if (req.body?.deliveryFee !== undefined && Number.isFinite(Number(req.body.deliveryFee))) {
+      biz.deliveryFee = Math.max(0, Number(req.body.deliveryFee));
+    }
+    if (req.body?.freeDeliveryAbove !== undefined && Number.isFinite(Number(req.body.freeDeliveryAbove))) {
+      biz.freeDeliveryAbove = Math.max(0, Number(req.body.freeDeliveryAbove));
+    }
+    if (typeof req.body?.storefrontPickupEnabled === 'boolean') {
+      biz.storefrontPickupEnabled = req.body.storefrontPickupEnabled;
+    }
+
+    appendAudit({
+      actor: 'Storefront Admin',
+      role: 'Owner',
+      action: `Updated eCommerce & Domain settings for ${biz.name} (${biz.customDomain || `misafarms.com/${biz.slug}`})`,
+      module: 'eCommerce & Domain',
+      storeName: biz.name,
+    });
+    saveDatabase();
     res.json({ business: biz });
   });
 
@@ -655,6 +842,7 @@ async function startServer() {
       module: 'POS Floor & Shelves',
       storeName: biz.name,
     });
+    saveDatabase();
     res.json({ business: biz });
   });
 
@@ -701,6 +889,7 @@ async function startServer() {
       storeName: db.stores.find((s) => s.id === emp.branchId)?.name || 'Branch',
     });
 
+    saveDatabase();
     res.json({ employee: emp, log, attendanceLogs: db.attendanceLogs.slice(0, 60) });
   });
 
@@ -725,6 +914,7 @@ async function startServer() {
       tx.staffRating = rating;
     }
 
+    saveDatabase();
     res.json({ employee: emp || null, transaction: tx || null });
   });
 
@@ -792,6 +982,68 @@ async function startServer() {
     });
 
     res.status(201).json({ employee: emp, platformUser: pUser });
+    saveDatabase();
+  });
+
+  app.patch('/api/employees/:id', (req: Request, res: Response) => {
+    const emp = db.employees.find((e) => e.id === req.params.id);
+    if (!emp) {
+      res.status(404).json({ error: 'Employee not found.' });
+      return;
+    }
+    if (typeof req.body?.name === 'string' && req.body.name.trim()) {
+      emp.name = sanitizeText(req.body.name, 100);
+    }
+    if (typeof req.body?.email === 'string' && req.body.email.trim()) {
+      emp.email = sanitizeText(req.body.email, 160);
+    }
+    if (isValidRole(req.body?.role)) {
+      emp.role = req.body.role;
+    }
+    if (typeof req.body?.pinCode === 'string') {
+      const cleanedPin = req.body.pinCode.replace(/[^0-9]/g, '').slice(0, 8);
+      if (cleanedPin.length >= 4) emp.pinCode = cleanedPin;
+    }
+    if (typeof req.body?.branchId === 'string' && req.body.branchId.trim()) {
+      emp.branchId = sanitizeText(req.body.branchId, 60);
+    }
+    if (req.body?.grossSalary !== undefined && Number.isFinite(Number(req.body.grossSalary))) {
+      emp.grossSalary = Math.max(0, Number(req.body.grossSalary));
+    }
+    if (typeof req.body?.active === 'boolean') {
+      emp.active = req.body.active;
+    }
+    if (req.body?.permissions && typeof req.body.permissions === 'object') {
+      emp.permissions = { ...emp.permissions, ...req.body.permissions };
+    }
+    appendAudit({
+      actor: 'HR Admin',
+      role: 'Owner',
+      action: `Updated employee profile & permissions for ${emp.name} (${emp.role})`,
+      module: 'Employees',
+      storeName: db.stores.find((s) => s.id === emp.branchId)?.name || 'HR Directory',
+    });
+    saveDatabase();
+    res.json({ employee: emp });
+  });
+
+  app.delete('/api/employees/:id', (req: Request, res: Response) => {
+    const idx = db.employees.findIndex((e) => e.id === req.params.id);
+    if (idx === -1) {
+      res.status(404).json({ error: 'Employee not found.' });
+      return;
+    }
+    const [removed] = db.employees.splice(idx, 1);
+    db.platformUsers = db.platformUsers.filter((u) => u.id !== `usr-${removed.id}`);
+    appendAudit({
+      actor: 'HR Admin',
+      role: 'Owner',
+      action: `Removed employee "${removed.name}" from roster`,
+      module: 'Employees',
+      storeName: 'HR Directory',
+    });
+    saveDatabase();
+    res.json({ deletedId: removed.id });
   });
 
   app.post('/api/stores', (req: Request, res: Response) => {
@@ -824,7 +1076,7 @@ async function startServer() {
     db.stores.push(store);
     for (const p of db.products) {
       if (p.businessId === businessId) {
-        p.stockByStore[store.id] = p.stockByStore[store.id] ?? 10;
+        p.stockByStore[store.id] = p.stockByStore[store.id] ?? 0;
       }
     }
 
@@ -837,6 +1089,7 @@ async function startServer() {
       emailNotified: true,
       recipientEmail: 'ops@misafatech.misafarms.com',
     });
+    saveDatabase();
 
     res.status(201).json({ store });
   });
@@ -899,6 +1152,75 @@ async function startServer() {
     });
 
     res.status(201).json({ product });
+    saveDatabase();
+  });
+
+  app.patch('/api/products/:id', (req: Request, res: Response) => {
+    const prod = db.products.find((p) => p.id === req.params.id);
+    if (!prod) {
+      res.status(404).json({ error: 'Product not found.' });
+      return;
+    }
+    if (typeof req.body?.name === 'string' && req.body.name.trim()) {
+      prod.name = sanitizeText(req.body.name, 140);
+    }
+    if (typeof req.body?.sku === 'string' && req.body.sku.trim()) {
+      prod.sku = sanitizeText(req.body.sku, 60);
+    }
+    if (typeof req.body?.category === 'string' && req.body.category.trim()) {
+      prod.category = sanitizeText(req.body.category, 60);
+    }
+    if (req.body?.subCategory !== undefined) {
+      prod.subCategory = sanitizeText(req.body.subCategory, 60) || undefined;
+    }
+    if (req.body?.zoneId !== undefined) prod.zoneId = sanitizeText(req.body.zoneId, 60) || undefined;
+    if (req.body?.slotId !== undefined) prod.slotId = sanitizeText(req.body.slotId, 60) || undefined;
+    if (req.body?.shelfCode !== undefined) prod.shelfCode = sanitizeText(req.body.shelfCode, 60) || undefined;
+    if (req.body?.price !== undefined && Number.isFinite(Number(req.body.price))) {
+      prod.price = Math.max(0, Number(req.body.price));
+    }
+    if (req.body?.cost !== undefined && Number.isFinite(Number(req.body.cost))) {
+      prod.cost = Math.max(0, Number(req.body.cost));
+    }
+    if (['B_16', 'E_0', 'A_EXEMPT'].includes(req.body?.taxCode)) {
+      prod.taxCode = req.body.taxCode;
+    }
+    if (req.body?.reorderPoint !== undefined && Number.isFinite(Number(req.body.reorderPoint))) {
+      prod.reorderPoint = Math.max(0, Math.floor(Number(req.body.reorderPoint)));
+    }
+    appendAudit({
+      actor: 'Inventory Clerk',
+      role: 'Inventory Clerk',
+      action: `Updated SKU ${prod.sku} (${prod.name})`,
+      module: 'Inventory',
+      storeName: 'Catalog',
+    });
+    saveDatabase();
+    res.json({ product: prod });
+  });
+
+  app.post('/api/inventory/adjust', (req: Request, res: Response) => {
+    const productId = sanitizeText(req.body?.productId, 60);
+    const storeId = sanitizeText(req.body?.storeId, 60);
+    const delta = Math.trunc(Number(req.body?.delta));
+    const reason = sanitizeText(req.body?.reason, 120) || 'Stock Count Adjustment';
+    const prod = db.products.find((p) => p.id === productId);
+    if (!prod || !storeId || !Number.isFinite(delta) || delta === 0) {
+      res.status(400).json({ error: 'Valid productId, storeId, and non-zero delta required.' });
+      return;
+    }
+    const prev = prod.stockByStore[storeId] ?? 0;
+    const next = Math.max(0, prev + delta);
+    prod.stockByStore[storeId] = next;
+    appendAudit({
+      actor: 'Inventory Clerk',
+      role: 'Inventory Clerk',
+      action: `Adjusted ${prod.sku} stock in ${storeId}: ${prev} -> ${next} (${reason})`,
+      module: 'Inventory',
+      storeName: db.stores.find((s) => s.id === storeId)?.name || storeId,
+    });
+    saveDatabase();
+    res.json({ product: prod });
   });
 
   app.post('/api/inventory/transfer', (req: Request, res: Response) => {
@@ -939,6 +1261,7 @@ async function startServer() {
       emailNotified: true,
       recipientEmail: 'warehouse@misafatech.misafarms.com',
     });
+    saveDatabase();
 
     res.json({ product });
   });
@@ -959,12 +1282,28 @@ async function startServer() {
       return { error: 'At least one cart line is required.' };
     }
 
+    const channel = ['POS', 'Field Agent', 'eCommerce', 'Restaurant'].includes(payload?.channel)
+      ? payload.channel
+      : 'POS';
+    const paymentMethodInput = sanitizeText(payload?.paymentMethod, 60);
+    const enabledGateways = business.paymentGateways.filter((g) => g.enabled);
+
+    if ((channel === 'POS' || channel === 'Restaurant') && !payload?.encryptedOffline) {
+      if (enabledGateways.length === 0) {
+        return { error: 'POS checkout is disabled: no payment gateways are configured and enabled for this business.' };
+      }
+      if (!paymentMethodInput || !enabledGateways.some((g) => g.displayName === paymentMethodInput)) {
+        return { error: `Selected payment method "${paymentMethodInput || 'None'}" is not enabled on this business.` };
+      }
+    }
+
     const maxAllowedDiscount = ROLE_MAX_DISCOUNT[role] ?? 5;
     let subtotal = 0;
     let discountTotal = 0;
     let taxAmount = 0;
     const computedLines: SaleTransaction['lines'] = [];
 
+    // Pre-validate every item and branch stock before mutating inventory
     for (const item of items) {
       const product = db.products.find((p) => p.id === item.productId && p.businessId === businessId);
       const qty = Number(item.qty);
@@ -978,6 +1317,18 @@ async function startServer() {
           error: `Role "${role}" cannot exceed ${maxAllowedDiscount}% line discount without Manager override.`,
         };
       }
+      const availableStock = product.stockByStore[store.id] ?? 0;
+      if (!payload?.encryptedOffline && availableStock < qty) {
+        return {
+          error: `Insufficient stock for "${product.name}" (${availableStock} available in ${store.name}).`,
+        };
+      }
+    }
+
+    for (const item of items) {
+      const product = db.products.find((p) => p.id === item.productId && p.businessId === businessId)!;
+      const qty = Number(item.qty);
+      const discountPct = Math.max(0, Math.min(100, Number(item.discountPct) || 0));
 
       const grossLine = product.price * qty;
       const discAmount = grossLine * (discountPct / 100);
@@ -1124,6 +1475,7 @@ async function startServer() {
       res.status(400).json({ error: result.error });
       return;
     }
+    saveDatabase();
     res.status(201).json({
       transaction: result.transaction,
       businesses: db.businesses,
@@ -1148,6 +1500,7 @@ async function startServer() {
       }
     }
 
+    saveDatabase();
     res.json({
       syncedCount: synced.length,
       synced,
@@ -1183,6 +1536,7 @@ async function startServer() {
       recipientEmail,
     });
 
+    saveDatabase();
     res.json({
       sent: true,
       recipientEmail,
@@ -1207,6 +1561,7 @@ async function startServer() {
       module: 'KRA eTIMS Hub',
       storeName: tx.storeName,
     });
+    saveDatabase();
     res.json({ transaction: tx });
   });
 
@@ -1256,6 +1611,7 @@ async function startServer() {
       recipientEmail: 'tax@misafatech.misafarms.com',
     });
 
+    saveDatabase();
     res.status(201).json({ creditNote, products: db.products });
   });
 
@@ -1284,6 +1640,7 @@ async function startServer() {
       storeName: db.stores.find((s) => s.id === storeId)?.name || 'Warehouse',
     });
 
+    saveDatabase();
     res.json({ record: rec, products: db.products });
   });
 
@@ -1380,6 +1737,7 @@ async function startServer() {
       storeName: 'Enterprise Global',
     });
 
+    saveDatabase();
     res.status(201).json({ record });
   });
 
@@ -1431,6 +1789,7 @@ async function startServer() {
       storeName: 'Platform Control',
     });
 
+    saveDatabase();
     res.json({ business: biz });
   });
 
@@ -1481,6 +1840,7 @@ async function startServer() {
       recipientEmail: user.email,
     });
 
+    saveDatabase();
     res.status(201).json({ user });
   });
 
@@ -1519,6 +1879,7 @@ async function startServer() {
       storeName: user.businessName || 'Platform Global',
     });
 
+    saveDatabase();
     res.json({ user });
   });
 
@@ -1551,6 +1912,7 @@ async function startServer() {
       storeName: 'Platform Control',
     });
 
+    saveDatabase();
     res.json({ subscriptionPlans: db.subscriptionPlans });
   });
 
@@ -1604,6 +1966,7 @@ async function startServer() {
       storeName: 'Platform Control',
     });
 
+    saveDatabase();
     res.json({ platformBillingGateways: db.platformBillingGateways });
   });
 
@@ -1689,11 +2052,870 @@ async function startServer() {
       emailNotified: Boolean(biz.ownerEmail),
       recipientEmail: biz.ownerEmail,
     });
+    saveDatabase();
 
     res.status(201).json({
       business: biz,
       invoice,
       subscriptionInvoices: db.subscriptionInvoices,
+    });
+  });
+
+  // --- INVOICING & B2B TAX BILLING ---
+  app.post('/api/invoices', (req: Request, res: Response) => {
+    const businessId = sanitizeText(req.body?.businessId, 60);
+    const storeId = sanitizeText(req.body?.storeId, 60);
+    const biz = db.businesses.find((b) => b.id === businessId);
+    const store = db.stores.find((s) => s.id === storeId && s.businessId === businessId) || db.stores.find((s) => s.businessId === businessId);
+    if (!biz || !store) {
+      res.status(400).json({ error: 'Valid business and branch required.' });
+      return;
+    }
+    const rawLines = Array.isArray(req.body?.lines) ? req.body.lines : [];
+    const customerName = sanitizeText(req.body?.customerName, 120);
+    if (!customerName || rawLines.length === 0) {
+      res.status(400).json({ error: 'Customer name and at least one invoice line required.' });
+      return;
+    }
+    const docType = req.body?.docType === 'Proforma Quote' ? 'Proforma Quote' : 'Tax Invoice';
+
+    let subtotal = 0;
+    let taxAmount = 0;
+    const lines: TaxInvoiceRecord['lines'] = [];
+    for (const rl of rawLines) {
+      const qty = Math.max(1, Number(rl.qty) || 1);
+      const unitPrice = Math.max(0, Number(rl.unitPrice) || 0);
+      const taxCode = ['B_16', 'E_0', 'A_EXEMPT'].includes(rl.taxCode) ? rl.taxCode : 'B_16';
+      const lineTotal = Math.round(qty * unitPrice * 100) / 100;
+      const vatFrac = taxCode === 'B_16' ? biz.vatRate / (100 + biz.vatRate) : 0;
+      subtotal += lineTotal;
+      taxAmount += Math.round(lineTotal * vatFrac * 100) / 100;
+      lines.push({
+        productId: rl.productId ? sanitizeText(rl.productId, 60) : undefined,
+        sku: sanitizeText(rl.sku, 40) || 'SRV-01',
+        name: sanitizeText(rl.name, 140) || 'Item',
+        qty,
+        unitPrice,
+        taxCode,
+        lineTotal,
+      });
+    }
+
+    const total = Math.round(subtotal * 100) / 100;
+    const seq = String(db.invoices.length + 102).padStart(4, '0');
+    const cuin = docType === 'Tax Invoice' && biz.etimsEnabled ? `${store.vscuSerial.slice(0, 14)}-INV-${seq}` : undefined;
+
+    const invoice: TaxInvoiceRecord = {
+      id: `inv-${crypto.randomUUID().slice(0, 8)}`,
+      invoiceNo: `${docType === 'Proforma Quote' ? 'QUO' : 'INV'}-${store.code.replace('-', '')}-${new Date().getFullYear()}-${seq}`,
+      businessId: biz.id,
+      storeId: store.id,
+      storeName: store.name,
+      customerName,
+      customerEmail: sanitizeText(req.body?.customerEmail, 160) || undefined,
+      customerPhone: sanitizeText(req.body?.customerPhone, 30) || undefined,
+      customerPin: sanitizeText(req.body?.customerPin, 30) || undefined,
+      docType,
+      status: docType === 'Proforma Quote' ? 'Draft' : 'Unpaid',
+      currency: biz.currency,
+      lines,
+      subtotal: total,
+      taxAmount: Math.round(taxAmount * 100) / 100,
+      total,
+      amountPaid: 0,
+      balanceDue: total,
+      dueDate: sanitizeText(req.body?.dueDate, 30) || new Date(Date.now() + 14 * 86400000).toISOString().slice(0, 10),
+      etimsCuin: cuin,
+      createdAt: new Date().toISOString(),
+    };
+
+    db.invoices.unshift(invoice);
+    appendAudit({
+      actor: 'Billing Desk',
+      role: 'Accountant',
+      action: `Created ${invoice.docType} ${invoice.invoiceNo} for ${invoice.customerName} (${invoice.currency} ${invoice.total.toFixed(2)})`,
+      module: 'Invoicing',
+      storeName: store.name,
+    });
+    saveDatabase();
+    res.status(201).json({ invoice });
+  });
+
+  app.post('/api/invoices/:id/pay', (req: Request, res: Response) => {
+    const inv = db.invoices.find((i) => i.id === req.params.id);
+    if (!inv) {
+      res.status(404).json({ error: 'Invoice not found.' });
+      return;
+    }
+    if (inv.status === 'Paid' || inv.balanceDue <= 0) {
+      res.status(400).json({ error: 'Invoice is already fully paid.' });
+      return;
+    }
+    const biz = db.businesses.find((b) => b.id === inv.businessId);
+    const store = db.stores.find((s) => s.id === inv.storeId) || db.stores.find((s) => s.businessId === inv.businessId);
+    if (!biz || !store) {
+      res.status(400).json({ error: 'Business or branch context missing.' });
+      return;
+    }
+
+    const payAmount = Math.min(inv.balanceDue, Math.max(0.01, Number(req.body?.amount) || inv.balanceDue));
+    const paymentMethod = sanitizeText(req.body?.paymentMethod, 60) || 'Bank / M-Pesa Invoice Settlement';
+    const paymentRef = sanitizeText(req.body?.paymentRef, 60) || `INV-${crypto.randomBytes(3).toString('hex').toUpperCase()}`;
+
+    const wasUnpaid = inv.amountPaid === 0;
+    inv.amountPaid = Math.round((inv.amountPaid + payAmount) * 100) / 100;
+    inv.balanceDue = Math.max(0, Math.round((inv.total - inv.amountPaid) * 100) / 100);
+    inv.status = inv.balanceDue <= 0.01 ? 'Paid' : 'Partial';
+    if (inv.status === 'Paid') inv.paidAt = new Date().toISOString();
+
+    // Deduct stock for linked product SKUs on first payment if Tax Invoice
+    if (wasUnpaid) {
+      for (const l of inv.lines) {
+        if (!l.productId) continue;
+        const prod = db.products.find((p) => p.id === l.productId && p.businessId === biz.id);
+        if (prod) {
+          prod.stockByStore[store.id] = Math.max(0, (prod.stockByStore[store.id] ?? 0) - l.qty);
+        }
+      }
+    }
+
+    const ratio = inv.total > 0 ? payAmount / inv.total : 1;
+    const taxPortion = Math.round(inv.taxAmount * ratio * 100) / 100;
+    const seq = String(db.transactions.length + 4913).padStart(6, '0');
+    const cuin = inv.etimsCuin || `${store.vscuSerial.slice(0, 14)}-${seq}`;
+
+    const tx: SaleTransaction = {
+      id: `tx-inv-${crypto.randomUUID().slice(0, 8)}`,
+      receiptNo: `${inv.invoiceNo}-RCPT`,
+      businessId: biz.id,
+      storeId: store.id,
+      storeName: store.name,
+      cashierRole: 'Accountant',
+      cashierName: 'Accounts Receivable',
+      customerName: inv.customerName,
+      customerPin: inv.customerPin,
+      customerPhone: inv.customerPhone,
+      customerEmail: inv.customerEmail,
+      channel: 'POS',
+      paymentMethod,
+      paymentRef,
+      currency: inv.currency,
+      subtotal: payAmount,
+      taxAmount: taxPortion,
+      discountTotal: 0,
+      total: payAmount,
+      amountTendered: payAmount,
+      changeDue: 0,
+      etimsCuin: cuin,
+      etimsStatus: 'Transmitted',
+      etimsQrData: `https://etims.kra.go.ke/verify?cuin=${encodeURIComponent(cuin)}&pin=${encodeURIComponent(biz.taxPin)}`,
+      lines: inv.lines.map((l) => ({
+        productId: l.productId || l.sku,
+        sku: l.sku,
+        name: l.name,
+        qty: l.qty,
+        unitPrice: l.unitPrice,
+        discountPct: 0,
+        taxCode: l.taxCode,
+        lineTotal: l.lineTotal,
+      })),
+      createdAt: new Date().toISOString(),
+      syncedAt: new Date().toISOString(),
+    };
+    inv.linkedTransactionId = tx.id;
+    db.transactions.unshift(tx);
+
+    const glRecord: ErpRecord = {
+      id: `rec-acc-${crypto.randomUUID().slice(0, 6)}`,
+      moduleId: 'accounting',
+      businessId: biz.id,
+      title: `JRNL-${inv.invoiceNo} · Invoice Payment (${paymentMethod})`,
+      subtitle: `Debit Bank/Cash ${payAmount.toFixed(2)} · Credit AR / Revenue & VAT ${taxPortion.toFixed(2)}`,
+      status: 'Posted',
+      amount: payAmount,
+      currency: inv.currency,
+      date: new Date().toISOString().slice(0, 10),
+      meta: { invoiceNo: inv.invoiceNo, cuin, ref: paymentRef },
+    };
+    db.erpRecords.unshift(glRecord);
+
+    appendAudit({
+      actor: 'Accounts Receivable',
+      role: 'Accountant',
+      action: `Recorded ${inv.currency} ${payAmount.toFixed(2)} payment on ${inv.invoiceNo} (Status: ${inv.status})`,
+      module: 'Invoicing',
+      storeName: store.name,
+    });
+    saveDatabase();
+    res.json({ invoice: inv, transaction: tx, products: db.products, erpRecord: glRecord });
+  });
+
+  // --- CRM PIPELINE ---
+  app.post('/api/crm/leads', (req: Request, res: Response) => {
+    const businessId = sanitizeText(req.body?.businessId, 60);
+    const name = sanitizeText(req.body?.name, 100);
+    if (!businessId || !name) {
+      res.status(400).json({ error: 'businessId and contact name required.' });
+      return;
+    }
+    const lead: CrmCustomerLead = {
+      id: `lead-${crypto.randomUUID().slice(0, 8)}`,
+      businessId,
+      name,
+      company: sanitizeText(req.body?.company, 100) || undefined,
+      email: sanitizeText(req.body?.email, 160) || undefined,
+      phone: sanitizeText(req.body?.phone, 30) || undefined,
+      kraPin: sanitizeText(req.body?.kraPin, 30) || undefined,
+      stage: ['Lead', 'Qualified', 'Proposal', 'Won', 'Customer'].includes(req.body?.stage)
+        ? req.body.stage
+        : 'Lead',
+      expectedValue: Math.max(0, Number(req.body?.expectedValue) || 0),
+      notes: sanitizeText(req.body?.notes, 240) || undefined,
+      source: ['POS', 'Online Store', 'Manual', 'B2B Referral'].includes(req.body?.source)
+        ? req.body.source
+        : 'Manual',
+      createdAt: new Date().toISOString(),
+    };
+    db.crmLeads.unshift(lead);
+    saveDatabase();
+    res.status(201).json({ lead });
+  });
+
+  app.patch('/api/crm/leads/:id', (req: Request, res: Response) => {
+    const lead = db.crmLeads.find((l) => l.id === req.params.id);
+    if (!lead) {
+      res.status(404).json({ error: 'CRM lead not found.' });
+      return;
+    }
+    if (['Lead', 'Qualified', 'Proposal', 'Won', 'Customer'].includes(req.body?.stage)) {
+      lead.stage = req.body.stage;
+    }
+    if (typeof req.body?.notes === 'string') lead.notes = sanitizeText(req.body.notes, 240);
+    if (req.body?.expectedValue !== undefined && Number.isFinite(Number(req.body.expectedValue))) {
+      lead.expectedValue = Math.max(0, Number(req.body.expectedValue));
+    }
+    saveDatabase();
+    res.json({ lead });
+  });
+
+  // --- KENYA STATUTORY PAYROLL RUN ---
+  app.post('/api/payroll/run', (req: Request, res: Response) => {
+    const businessId = sanitizeText(req.body?.businessId, 60);
+    const biz = db.businesses.find((b) => b.id === businessId);
+    if (!biz) {
+      res.status(404).json({ error: 'Business not found.' });
+      return;
+    }
+    const periodLabel =
+      sanitizeText(req.body?.periodLabel, 60) ||
+      new Date().toLocaleDateString('en-US', { month: 'short', year: 'numeric' });
+    const activeStaff = db.employees.filter((e) => e.businessId === businessId && e.active && e.grossSalary > 0);
+    if (activeStaff.length === 0) {
+      res.status(400).json({ error: 'No active salaried employees found for this business.' });
+      return;
+    }
+
+    const payslips: PayrollRunPayslip[] = [];
+    let totalGross = 0;
+    let totalPaye = 0;
+    let totalShif = 0;
+    let totalNssf = 0;
+    let totalHousingLevy = 0;
+    let totalNet = 0;
+    let totalEmployerCost = 0;
+
+    for (const emp of activeStaff) {
+      const calc = computeServerKenyaPayroll(emp.grossSalary);
+      totalGross += calc.grossSalary;
+      totalPaye += calc.paye;
+      totalShif += calc.shif;
+      totalNssf += calc.nssf;
+      totalHousingLevy += calc.housingLevy;
+      totalNet += calc.netPay;
+      totalEmployerCost += calc.employerTotal;
+      payslips.push({
+        employeeId: emp.id,
+        employeeName: emp.name,
+        role: emp.role,
+        grossSalary: calc.grossSalary,
+        nssf: calc.nssf,
+        shif: calc.shif,
+        housingLevy: calc.housingLevy,
+        taxablePay: calc.taxablePay,
+        paye: calc.paye,
+        totalDeductions: calc.totalDeductions,
+        netPay: calc.netPay,
+      });
+    }
+
+    const run: PayrollRunRecord = {
+      id: `payrun-${crypto.randomUUID().slice(0, 8)}`,
+      businessId: biz.id,
+      periodLabel,
+      employeeCount: payslips.length,
+      currency: biz.currency,
+      totalGross: Math.round(totalGross * 100) / 100,
+      totalPaye: Math.round(totalPaye * 100) / 100,
+      totalShif: Math.round(totalShif * 100) / 100,
+      totalNssf: Math.round(totalNssf * 100) / 100,
+      totalHousingLevy: Math.round(totalHousingLevy * 100) / 100,
+      totalNet: Math.round(totalNet * 100) / 100,
+      totalEmployerCost: Math.round(totalEmployerCost * 100) / 100,
+      status: 'Posted',
+      payslips,
+      createdAt: new Date().toISOString(),
+    };
+    db.payrollRuns.unshift(run);
+
+    const glRecord: ErpRecord = {
+      id: `rec-acc-${crypto.randomUUID().slice(0, 6)}`,
+      moduleId: 'accounting',
+      businessId: biz.id,
+      title: `JRNL-PAY-${periodLabel.toUpperCase()} · Payroll Statutory Settlement`,
+      subtitle: `Debit 610100 Salaries (${run.totalGross.toFixed(2)}) · Credit Net Pay (${run.totalNet.toFixed(2)}), PAYE (${run.totalPaye.toFixed(2)}), SHIF/NSSF/AHL`,
+      status: 'Posted',
+      amount: run.totalEmployerCost,
+      currency: biz.currency,
+      date: new Date().toISOString().slice(0, 10),
+      meta: { period: periodLabel, employees: run.employeeCount },
+    };
+    db.erpRecords.unshift(glRecord);
+
+    appendAudit({
+      actor: 'Payroll Officer',
+      role: 'Accountant',
+      action: `Executed ${periodLabel} Kenya payroll for ${run.employeeCount} staff (Net: ${biz.currency} ${run.totalNet.toFixed(2)})`,
+      module: 'Payroll',
+      storeName: biz.name,
+    });
+    saveDatabase();
+    res.status(201).json({ payrollRun: run, erpRecord: glRecord });
+  });
+
+  // --- ACCOUNTING DOUBLE-ENTRY MANUAL JOURNAL ---
+  app.post('/api/accounting/journal', (req: Request, res: Response) => {
+    const businessId = sanitizeText(req.body?.businessId, 60);
+    const debitAccount = sanitizeText(req.body?.debitAccount, 80);
+    const creditAccount = sanitizeText(req.body?.creditAccount, 80);
+    const description = sanitizeText(req.body?.description, 160);
+    const amount = Math.max(0.01, Number(req.body?.amount) || 0);
+    const date = sanitizeText(req.body?.date, 20) || new Date().toISOString().slice(0, 10);
+    const biz = db.businesses.find((b) => b.id === businessId);
+
+    if (!biz || !debitAccount || !creditAccount || !Number.isFinite(amount) || amount <= 0) {
+      res.status(400).json({ error: 'Valid business, debit account, credit account, and positive amount required.' });
+      return;
+    }
+
+    const record: ErpRecord = {
+      id: `rec-acc-${crypto.randomUUID().slice(0, 8)}`,
+      moduleId: 'accounting',
+      businessId: biz.id,
+      title: `JRNL-MAN-${Math.floor(1000 + Math.random() * 8999)} · ${description || `${debitAccount} / ${creditAccount}`}`,
+      subtitle: `Debit ${debitAccount} · Credit ${creditAccount}`,
+      status: 'Posted',
+      amount: Math.round(amount * 100) / 100,
+      currency: biz.currency,
+      date,
+      meta: { debitAccount, creditAccount, manual: 'true' },
+    };
+    db.erpRecords.unshift(record);
+    appendAudit({
+      actor: 'Accountant',
+      role: 'Accountant',
+      action: `Posted journal entry (${biz.currency} ${record.amount?.toFixed(2)}): Debit ${debitAccount} / Credit ${creditAccount}`,
+      module: 'Accounting',
+      storeName: biz.name,
+    });
+    saveDatabase();
+    res.status(201).json({ record });
+  });
+
+  // --- ONLINE ORDERS MANAGER & REAL STOREFRONT CHECKOUT ---
+  app.get('/api/online-orders', (req: Request, res: Response) => {
+    const businessId = sanitizeText(req.query.businessId, 60);
+    const orders = businessId
+      ? db.onlineOrders.filter((o) => o.businessId === businessId)
+      : db.onlineOrders;
+    res.json({ onlineOrders: orders });
+  });
+
+  app.post('/api/online-orders', (req: Request, res: Response) => {
+    const businessId = sanitizeText(req.body?.businessId, 60);
+    const storeId = sanitizeText(req.body?.storeId, 60);
+    const biz = db.businesses.find((b) => b.id === businessId);
+    const store = db.stores.find((s) => s.id === storeId && s.businessId === businessId) || db.stores.find((s) => s.businessId === businessId);
+    if (!biz || !store) {
+      res.status(400).json({ error: 'Valid business and fulfillment branch required.' });
+      return;
+    }
+    if (!biz.ecommerceEnabled) {
+      res.status(403).json({ error: 'eCommerce storefront is not activated for this business.' });
+      return;
+    }
+
+    const customerName = sanitizeText(req.body?.customerName, 100);
+    const customerPhone = sanitizeText(req.body?.customerPhone, 30);
+    const deliveryMethod = req.body?.deliveryMethod === 'pickup' ? 'pickup' : 'delivery';
+    const deliveryAddress = sanitizeText(req.body?.deliveryAddress, 200) || (deliveryMethod === 'pickup' ? `Store Pickup: ${store.name}` : '');
+    const items = Array.isArray(req.body?.lines) ? req.body.lines : [];
+
+    if (!customerName || !customerPhone || items.length === 0) {
+      res.status(400).json({ error: 'Customer name, phone, and at least one item required.' });
+      return;
+    }
+    if (deliveryMethod === 'delivery' && !deliveryAddress) {
+      res.status(400).json({ error: 'Delivery address is required for home/office delivery.' });
+      return;
+    }
+
+    // Validate stock first
+    for (const item of items) {
+      const prod = db.products.find((p) => p.id === item.productId && p.businessId === biz.id);
+      const qty = Math.floor(Number(item.qty) || 0);
+      if (!prod || qty <= 0) {
+        res.status(400).json({ error: 'Invalid product or quantity in online basket.' });
+        return;
+      }
+      const avail = prod.stockByStore[store.id] ?? 0;
+      if (avail < qty) {
+        res.status(400).json({ error: `Insufficient stock for "${prod.name}" (${avail} left at ${store.name}).` });
+        return;
+      }
+    }
+
+    let subtotal = 0;
+    let taxAmount = 0;
+    const lines: OnlineOrder['lines'] = [];
+
+    for (const item of items) {
+      const prod = db.products.find((p) => p.id === item.productId && p.businessId === biz.id)!;
+      const qty = Math.floor(Number(item.qty));
+      const lineTotal = Math.round(prod.price * qty * 100) / 100;
+      const vatFrac = prod.taxCode === 'B_16' ? biz.vatRate / (100 + biz.vatRate) : 0;
+      subtotal += lineTotal;
+      taxAmount += Math.round(lineTotal * vatFrac * 100) / 100;
+      prod.stockByStore[store.id] = Math.max(0, (prod.stockByStore[store.id] ?? 0) - qty);
+      lines.push({
+        productId: prod.id,
+        sku: prod.sku,
+        name: prod.name,
+        qty,
+        unitPrice: prod.price,
+        taxCode: prod.taxCode,
+        lineTotal,
+      });
+    }
+
+    const baseFee = Number(biz.deliveryFee) || 0;
+    const freeThreshold = Number(biz.freeDeliveryAbove) || 0;
+    const deliveryFee =
+      deliveryMethod === 'pickup'
+        ? 0
+        : freeThreshold > 0 && subtotal >= freeThreshold
+          ? 0
+          : baseFee;
+    const total = Math.round((subtotal + deliveryFee) * 100) / 100;
+    const paymentMethod = sanitizeText(req.body?.paymentMethod, 60) || 'Pay on Delivery (COD)';
+    const paymentStatus: OnlineOrder['paymentStatus'] =
+      paymentMethod.toLowerCase().includes('cod') || paymentMethod.toLowerCase().includes('delivery')
+        ? 'Pending COD'
+        : 'Paid';
+    const paymentRef =
+      sanitizeText(req.body?.paymentRef, 60) ||
+      `WEB${crypto.randomBytes(3).toString('hex').toUpperCase()}`;
+
+    const now = new Date().toISOString();
+    const seq = String(db.transactions.length + 4913).padStart(6, '0');
+    const orderNo = `WEB-${new Date().getFullYear()}-${String(db.onlineOrders.length + 8822)}`;
+    const cuin = biz.etimsEnabled ? `${store.vscuSerial.slice(0, 14)}-${seq}` : `WEB-${store.code}-${seq}`;
+
+    // Create synced SaleTransaction
+    const tx: SaleTransaction = {
+      id: `tx-web-${crypto.randomUUID().slice(0, 8)}`,
+      receiptNo: orderNo,
+      businessId: biz.id,
+      storeId: store.id,
+      storeName: store.name,
+      cashierRole: 'Store Manager',
+      cashierName: 'eCommerce Storefront',
+      customerName,
+      customerPhone,
+      customerEmail: sanitizeText(req.body?.customerEmail, 160) || undefined,
+      customerPin: sanitizeText(req.body?.customerPin, 30) || undefined,
+      channel: 'eCommerce',
+      paymentMethod,
+      paymentRef,
+      currency: biz.currency,
+      subtotal: Math.round(subtotal * 100) / 100,
+      taxAmount: Math.round(taxAmount * 100) / 100,
+      discountTotal: 0,
+      total,
+      amountTendered: paymentStatus === 'Paid' ? total : 0,
+      changeDue: 0,
+      etimsCuin: cuin,
+      etimsStatus: 'Transmitted',
+      etimsQrData: `https://etims.kra.go.ke/verify?cuin=${encodeURIComponent(cuin)}&pin=${encodeURIComponent(biz.taxPin)}`,
+      lines: lines.map((l) => ({
+        productId: l.productId,
+        sku: l.sku,
+        name: l.name,
+        qty: l.qty,
+        unitPrice: l.unitPrice,
+        discountPct: 0,
+        taxCode: l.taxCode,
+        lineTotal: l.lineTotal,
+      })),
+      createdAt: now,
+      syncedAt: now,
+    };
+    db.transactions.unshift(tx);
+
+    // Create synced TaxInvoiceRecord
+    const invSeq = String(db.invoices.length + 102).padStart(4, '0');
+    const invoice: TaxInvoiceRecord = {
+      id: `inv-web-${crypto.randomUUID().slice(0, 8)}`,
+      invoiceNo: `INV-WEB-${new Date().getFullYear()}-${invSeq}`,
+      businessId: biz.id,
+      storeId: store.id,
+      storeName: store.name,
+      customerName,
+      customerEmail: tx.customerEmail,
+      customerPhone,
+      customerPin: tx.customerPin,
+      docType: 'Tax Invoice',
+      status: paymentStatus === 'Paid' ? 'Paid' : 'Unpaid',
+      currency: biz.currency,
+      lines: lines.map((l) => ({
+        productId: l.productId,
+        sku: l.sku,
+        name: l.name,
+        qty: l.qty,
+        unitPrice: l.unitPrice,
+        taxCode: l.taxCode,
+        lineTotal: l.lineTotal,
+      })),
+      subtotal: Math.round(subtotal * 100) / 100,
+      taxAmount: Math.round(taxAmount * 100) / 100,
+      total,
+      amountPaid: paymentStatus === 'Paid' ? total : 0,
+      balanceDue: paymentStatus === 'Paid' ? 0 : total,
+      dueDate: now.slice(0, 10),
+      etimsCuin: cuin,
+      linkedTransactionId: tx.id,
+      createdAt: now,
+      paidAt: paymentStatus === 'Paid' ? now : undefined,
+    };
+    db.invoices.unshift(invoice);
+
+    // Create OnlineOrder
+    const order: OnlineOrder = {
+      id: `ord-${crypto.randomUUID().slice(0, 8)}`,
+      orderNo,
+      businessId: biz.id,
+      storeId: store.id,
+      storeName: store.name,
+      customerName,
+      customerPhone,
+      customerEmail: tx.customerEmail,
+      customerPin: tx.customerPin,
+      deliveryMethod,
+      deliveryAddress,
+      fulfillmentStatus: 'Pending',
+      paymentMethod,
+      paymentRef,
+      paymentStatus,
+      currency: biz.currency,
+      subtotal: Math.round(subtotal * 100) / 100,
+      taxAmount: Math.round(taxAmount * 100) / 100,
+      deliveryFee,
+      total,
+      lines,
+      linkedTransactionId: tx.id,
+      linkedInvoiceId: invoice.id,
+      etimsCuin: cuin,
+      notes: sanitizeText(req.body?.notes, 200) || undefined,
+      createdAt: now,
+      updatedAt: now,
+    };
+    db.onlineOrders.unshift(order);
+
+    // Sync Accounting GL
+    const glRecord: ErpRecord = {
+      id: `rec-acc-${crypto.randomUUID().slice(0, 6)}`,
+      moduleId: 'accounting',
+      businessId: biz.id,
+      title: `JRNL-${order.orderNo} · Online Store Checkout (${paymentMethod})`,
+      subtitle: `Auto-synced Online Order -> Inventory, Invoice ${invoice.invoiceNo}, CUIN ${cuin}`,
+      status: 'Posted',
+      amount: total,
+      currency: biz.currency,
+      date: now.slice(0, 10),
+      meta: { orderNo, cuin, channel: 'eCommerce' },
+    };
+    db.erpRecords.unshift(glRecord);
+
+    appendAudit({
+      actor: customerName,
+      role: 'Cashier',
+      action: `Placed Online Order ${order.orderNo} (${biz.currency} ${total.toFixed(2)}) -> Deducted ${store.name} stock & issued ${invoice.invoiceNo}`,
+      module: 'Online Orders',
+      storeName: store.name,
+    });
+    saveDatabase();
+
+    res.status(201).json({
+      onlineOrder: order,
+      transaction: tx,
+      invoice,
+      products: db.products,
+      erpRecord: glRecord,
+    });
+  });
+
+  app.patch('/api/online-orders/:id/status', (req: Request, res: Response) => {
+    const order = db.onlineOrders.find((o) => o.id === req.params.id);
+    if (!order) {
+      res.status(404).json({ error: 'Online order not found.' });
+      return;
+    }
+    const nextStatus = req.body?.fulfillmentStatus as OnlineOrderFulfillmentStatus;
+    if (!['Pending', 'Confirmed & Packed', 'Dispatched', 'Delivered', 'Cancelled'].includes(nextStatus)) {
+      res.status(400).json({ error: 'Invalid fulfillment status.' });
+      return;
+    }
+    const prevStatus = order.fulfillmentStatus;
+    order.fulfillmentStatus = nextStatus;
+    order.updatedAt = new Date().toISOString();
+
+    let creditNote: SaleTransaction | undefined;
+    const linkedInv = order.linkedInvoiceId
+      ? db.invoices.find((i) => i.id === order.linkedInvoiceId)
+      : undefined;
+
+    if (nextStatus === 'Delivered' && order.paymentStatus === 'Pending COD') {
+      order.paymentStatus = 'Paid';
+      if (linkedInv) {
+        linkedInv.status = 'Paid';
+        linkedInv.amountPaid = linkedInv.total;
+        linkedInv.balanceDue = 0;
+        linkedInv.paidAt = order.updatedAt;
+      }
+    }
+
+    // Restock inventory & issue eTIMS credit note on cancellation
+    if (nextStatus === 'Cancelled' && prevStatus !== 'Cancelled') {
+      order.paymentStatus = 'Refunded';
+      for (const l of order.lines) {
+        const prod = db.products.find((p) => p.id === l.productId && p.businessId === order.businessId);
+        if (prod) {
+          prod.stockByStore[order.storeId] = (prod.stockByStore[order.storeId] ?? 0) + l.qty;
+        }
+      }
+      if (linkedInv) {
+        linkedInv.status = 'Void';
+        linkedInv.balanceDue = 0;
+      }
+      const origTx = order.linkedTransactionId
+        ? db.transactions.find((t) => t.id === order.linkedTransactionId)
+        : undefined;
+      if (origTx) {
+        const cnCuin = `KRA-CN-${String(db.transactions.length + 4913).padStart(6, '0')}`;
+        creditNote = {
+          ...structuredClone(origTx),
+          id: `cn-${crypto.randomUUID().slice(0, 8)}`,
+          receiptNo: `CN-${origTx.receiptNo}`,
+          subtotal: -Math.abs(origTx.subtotal),
+          taxAmount: -Math.abs(origTx.taxAmount),
+          total: -Math.abs(origTx.total),
+          etimsCuin: cnCuin,
+          etimsStatus: 'Credit Note',
+          referenceCuin: origTx.etimsCuin,
+          customerName: `${origTx.customerName} (Online Order Cancelled)`,
+          createdAt: order.updatedAt,
+          syncedAt: order.updatedAt,
+        };
+        db.transactions.unshift(creditNote);
+      }
+    }
+
+    appendAudit({
+      actor: 'Order Fulfillment',
+      role: 'Store Manager',
+      action: `Updated Online Order ${order.orderNo} status: ${prevStatus} -> ${nextStatus}`,
+      module: 'Online Orders',
+      storeName: order.storeName,
+    });
+    saveDatabase();
+    res.json({
+      onlineOrder: order,
+      products: db.products,
+      invoices: db.invoices,
+      creditNote,
+    });
+  });
+
+  // --- BACKUPS & RESTORE ---
+  app.get('/api/backups', (req: Request, res: Response) => {
+    const businessId = sanitizeText(req.query.businessId, 60);
+    const list = businessId
+      ? db.backups.filter((b) => b.businessId === businessId)
+      : db.backups;
+    res.json({ backups: list });
+  });
+
+  app.post('/api/backups', (req: Request, res: Response) => {
+    const businessId = sanitizeText(req.body?.businessId, 60);
+    const scope = req.body?.scope === 'platform' ? 'platform' : 'business';
+    const label = sanitizeText(req.body?.label, 120) || `Snapshot ${new Date().toLocaleString()}`;
+    const createdBy = sanitizeText(req.body?.createdBy, 80) || 'Business Admin';
+
+    const biz = businessId ? db.businesses.find((b) => b.id === businessId) : undefined;
+    if (scope === 'business' && !biz) {
+      res.status(404).json({ error: 'Business not found for backup.' });
+      return;
+    }
+
+    const payload =
+      scope === 'business' && biz
+        ? {
+            business: structuredClone(biz),
+            stores: structuredClone(db.stores.filter((s) => s.businessId === biz.id)),
+            employees: structuredClone(db.employees.filter((e) => e.businessId === biz.id)),
+            products: structuredClone(db.products.filter((p) => p.businessId === biz.id)),
+            transactions: structuredClone(db.transactions.filter((t) => t.businessId === biz.id)),
+            invoices: structuredClone(db.invoices.filter((i) => i.businessId === biz.id)),
+            onlineOrders: structuredClone(db.onlineOrders.filter((o) => o.businessId === biz.id)),
+            crmLeads: structuredClone(db.crmLeads.filter((c) => c.businessId === biz.id)),
+            payrollRuns: structuredClone(db.payrollRuns.filter((r) => r.businessId === biz.id)),
+            erpRecords: structuredClone(db.erpRecords.filter((r) => r.businessId === biz.id)),
+          }
+        : {
+            businesses: structuredClone(db.businesses),
+            stores: structuredClone(db.stores),
+            employees: structuredClone(db.employees),
+            products: structuredClone(db.products),
+            transactions: structuredClone(db.transactions),
+            invoices: structuredClone(db.invoices),
+            onlineOrders: structuredClone(db.onlineOrders),
+            crmLeads: structuredClone(db.crmLeads),
+            payrollRuns: structuredClone(db.payrollRuns),
+            erpRecords: structuredClone(db.erpRecords),
+          };
+
+    const jsonSize = Buffer.byteLength(JSON.stringify(payload), 'utf8');
+    const snapshot: BackupSnapshot = {
+      id: `bkp-${crypto.randomUUID().slice(0, 8)}`,
+      businessId: biz?.id,
+      scope,
+      label,
+      createdBy,
+      createdAt: new Date().toISOString(),
+      sizeBytes: jsonSize,
+      counts: {
+        stores: (payload.stores as unknown[]).length,
+        employees: (payload.employees as unknown[]).length,
+        products: (payload.products as unknown[]).length,
+        transactions: (payload.transactions as unknown[]).length,
+        invoices: (payload.invoices as unknown[]).length,
+        onlineOrders: (payload.onlineOrders as unknown[]).length,
+      },
+      payload,
+    };
+
+    db.backups.unshift(snapshot);
+    appendAudit({
+      actor: createdBy,
+      role: 'Owner',
+      action: `Created ${scope} backup snapshot "${label}" (${Math.round(jsonSize / 1024)} KB)`,
+      module: 'Backup & Restore',
+      storeName: biz?.name || 'Platform Global',
+    });
+    saveDatabase();
+    res.status(201).json({ backup: snapshot });
+  });
+
+  function applyBusinessBackupPayload(bizId: string, payload: Record<string, any>) {
+    if (payload.business && typeof payload.business === 'object') {
+      const idx = db.businesses.findIndex((b) => b.id === bizId);
+      if (idx >= 0) db.businesses[idx] = structuredClone(payload.business);
+      else db.businesses.push(structuredClone(payload.business));
+    }
+    const replaceSlice = <T extends { businessId: string }>(arr: T[], incoming: unknown): T[] => {
+      if (!Array.isArray(incoming)) return arr;
+      return [...arr.filter((x) => x.businessId !== bizId), ...structuredClone(incoming as T[])];
+    };
+    db.stores = replaceSlice(db.stores, payload.stores);
+    db.employees = replaceSlice(db.employees, payload.employees);
+    db.products = replaceSlice(db.products, payload.products);
+    db.transactions = replaceSlice(db.transactions, payload.transactions);
+    db.invoices = replaceSlice(db.invoices, payload.invoices);
+    db.onlineOrders = replaceSlice(db.onlineOrders, payload.onlineOrders);
+    db.crmLeads = replaceSlice(db.crmLeads, payload.crmLeads);
+    db.payrollRuns = replaceSlice(db.payrollRuns, payload.payrollRuns);
+    db.erpRecords = replaceSlice(db.erpRecords, payload.erpRecords);
+  }
+
+  app.post('/api/backups/:id/restore', (req: Request, res: Response) => {
+    const snap = db.backups.find((b) => b.id === req.params.id);
+    if (!snap) {
+      res.status(404).json({ error: 'Backup snapshot not found.' });
+      return;
+    }
+    if (snap.scope === 'business' && snap.businessId) {
+      applyBusinessBackupPayload(snap.businessId, snap.payload as Record<string, any>);
+    }
+    appendAudit({
+      actor: 'System Restore',
+      role: 'Owner',
+      action: `Restored backup snapshot "${snap.label}" (${snap.createdAt})`,
+      module: 'Backup & Restore',
+      storeName: snap.businessId || 'Platform Global',
+    });
+    saveDatabase();
+    res.json({
+      restored: true,
+      businesses: db.businesses,
+      stores: db.stores,
+      employees: db.employees,
+      products: db.products,
+      transactions: db.transactions,
+      invoices: db.invoices,
+      onlineOrders: db.onlineOrders,
+      crmLeads: db.crmLeads,
+      payrollRuns: db.payrollRuns,
+      erpRecords: db.erpRecords,
+    });
+  });
+
+  app.post('/api/backups/import', (req: Request, res: Response) => {
+    const businessId = sanitizeText(req.body?.businessId, 60);
+    const payload = req.body?.payload;
+    if (!businessId || !payload || typeof payload !== 'object') {
+      res.status(400).json({ error: 'Valid businessId and backup JSON payload required.' });
+      return;
+    }
+    applyBusinessBackupPayload(businessId, payload as Record<string, any>);
+    appendAudit({
+      actor: 'System Restore',
+      role: 'Owner',
+      action: `Imported & restored JSON backup archive for business ${businessId}`,
+      module: 'Backup & Restore',
+      storeName: businessId,
+    });
+    saveDatabase();
+    res.json({
+      restored: true,
+      businesses: db.businesses,
+      stores: db.stores,
+      employees: db.employees,
+      products: db.products,
+      transactions: db.transactions,
+      invoices: db.invoices,
+      onlineOrders: db.onlineOrders,
+      crmLeads: db.crmLeads,
+      payrollRuns: db.payrollRuns,
+      erpRecords: db.erpRecords,
     });
   });
 
