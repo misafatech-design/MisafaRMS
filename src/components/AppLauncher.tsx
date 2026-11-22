@@ -181,10 +181,13 @@ export const AppLauncher: React.FC<AppLauncherProps> = ({
                 {accountTier === 'admin' && (
                   <button
                     type="button"
-                    onClick={onOpenWizard}
+                    onClick={() => {
+                      const posAdminMod = APP_MODULES.find((m) => m.id === 'pos_settings');
+                      if (posAdminMod) onLaunchModule(posAdminMod);
+                    }}
                     className="rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs font-medium text-slate-700 transition-colors hover:bg-slate-50 whitespace-nowrap shrink-0 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-200 dark:hover:bg-slate-700"
                   >
-                    New Business
+                    POS Setup &amp; Z-Reports
                   </button>
                 )}
               </div>

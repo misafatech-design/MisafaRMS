@@ -6,6 +6,7 @@ import { AppModuleMeta } from '../types/erp';
 
 interface LandingPageProps {
   onLaunchDemoBusiness: () => void;
+  onEmployeePosLogin: () => void;
   onStartFreeOnboarding: () => void;
   onGoogleSignIn: () => void;
   onOpenPortalSlug: (slug: string) => void;
@@ -15,6 +16,7 @@ interface LandingPageProps {
 
 export const LandingPage: React.FC<LandingPageProps> = ({
   onLaunchDemoBusiness,
+  onEmployeePosLogin,
   onStartFreeOnboarding,
   onGoogleSignIn,
   onOpenPortalSlug,
@@ -140,7 +142,7 @@ export const LandingPage: React.FC<LandingPageProps> = ({
           ! Built for Kenya eTIMS, M-Pesa & multi-store retail.
         </p>
 
-        {/* Primary Action Row including Demo Business Button */}
+        {/* Primary Action Row including Demo Business & Employee POS PIN Login */}
         <div className="mt-8 flex flex-wrap items-center justify-center gap-3">
           <button
             type="button"
@@ -157,6 +159,14 @@ export const LandingPage: React.FC<LandingPageProps> = ({
           >
             <Play className="h-4 w-4 text-amber-300" />
             <span>Demo Business (MisafaTech)</span>
+          </button>
+
+          <button
+            type="button"
+            onClick={onEmployeePosLogin}
+            className="rounded-lg border border-teal-700 bg-white px-5 py-3 text-sm font-semibold text-teal-800 transition-colors hover:bg-teal-50 whitespace-nowrap"
+          >
+            Employee POS (PIN)
           </button>
 
           <button

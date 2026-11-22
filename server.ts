@@ -209,6 +209,7 @@ async function startServer() {
       paybillOrTill,
       installedModuleIds: [
         'pos',
+        'pos_settings',
         'inventory',
         'invoicing',
         'accounting',

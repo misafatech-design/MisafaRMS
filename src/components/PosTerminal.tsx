@@ -1,10 +1,11 @@
 import React, { useMemo, useState } from 'react';
 import {
+  ArrowLeft,
   Barcode,
   CheckCircle2,
+  CloudOff,
   CreditCard,
-  Download,
-  FileSpreadsheet,
+  Delete,
   KeyRound,
   Lock,
   Mail,
@@ -15,19 +16,17 @@ import {
   Printer,
   QrCode,
   Send,
-  Settings2,
   Smartphone,
   Trash2,
   Wallet,
+  Wifi,
   X,
 } from 'lucide-react';
 import {
-  AccountTier,
   BusinessEntity,
   CartLine,
   EmployeeRecord,
   PaymentMethod,
-  PosCustomizationConfig,
   ProductItem,
   SaleTransaction,
   StoreBranch,
@@ -39,15 +38,14 @@ interface PosTerminalProps {
   business: BusinessEntity;
   store: StoreBranch;
   products: ProductItem[];
-  transactions: SaleTransaction[];
   employees: EmployeeRecord[];
   activeEmployee: EmployeeRecord | null;
   onUnlockByPin: (pin: string) => EmployeeRecord | null;
-  accountTier: AccountTier;
   activeRole: UserRole;
   isOffline: boolean;
-  onUpdatePosConfig: (config: PosCustomizationConfig) => Promise<void>;
-  onEmailReceipt: (txId: string, email: string) => Promise<void>;
+  canExitToAdmin: boolean;
+  onExitToAdmin?: () => void;
+  initialLocked?: boolean;
   onCompleteCheckout: (payload: {
     lines: Array<{ productId: string; qty: number; discountPct: number }>;
     customerName: string;
@@ -59,22 +57,23 @@ interface PosTerminalProps {
     amountTendered: number;
     channel: 'POS';
   }) => Promise<SaleTransaction | null>;
+  onEmailReceipt: (txId: string, email: string) => Promise<void>;
 }
 
 export const PosTerminal: React.FC<PosTerminalProps> = ({
   business,
   store,
   products,
-  transactions,
   employees,
   activeEmployee,
   onUnlockByPin,
-  accountTier,
   activeRole,
   isOffline,
-  onUpdatePosConfig,
-  onEmailReceipt,
+  canExitToAdmin,
+  onExitToAdmin,
+  initialLocked = true,
   onCompleteCheckout,
+  onEmailReceipt,
 }) => {
   const [search, setSearch] = useState('');
   const [barcodeInput, setBarcodeInput] = useState('');
@@ -105,21 +104,15 @@ export const PosTerminal: React.FC<PosTerminalProps> = ({
   const [receiptEmailInput, setReceiptEmailInput] = useState('');
   const [emailStatusMsg, setEmailStatusMsg] = useState('');
   const [sendingEmail, setSendingEmail] = useState(false);
-  const [showZReport, setShowZReport] = useState(false);
 
-  // PIN Lock & Shift Switcher
-  const [isLocked, setIsLocked] = useState(business.posConfig.requirePinPerShift);
+  // Employee PIN Lock Screen (POS entry point)
+  const [isLocked, setIsLocked] = useState(
+    initialLocked || business.posConfig.requirePinPerShift
+  );
   const [pinEntry, setPinEntry] = useState('');
   const [pinError, setPinError] = useState('');
 
-  // POS Customization & Shortcut Modal
-  const [showCustomize, setShowCustomize] = useState(false);
-  const [draftConfig, setDraftConfig] = useState<PosCustomizationConfig>(business.posConfig);
-  const [savingConfig, setSavingConfig] = useState(false);
-
   const perms = activeEmployee?.permissions || ROLE_PERMISSIONS[activeRole];
-  const canCustomizePos = accountTier === 'admin' || activeRole === 'Store Manager';
-
   const selectedGatewayObj = enabledGateways.find((g) => g.displayName === paymentMethod);
 
   const categories = useMemo(() => {
@@ -184,7 +177,7 @@ export const PosTerminal: React.FC<PosTerminalProps> = ({
     const clamped = Math.max(0, Math.min(100, val));
     if (clamped > perms.maxDiscountPct) {
       setErrorMsg(
-        `${activeEmployee?.name || activeRole} is capped at ${perms.maxDiscountPct}% line discount. Unlock with Store Manager PIN (1234) for higher overrides.`
+        `${activeEmployee?.name || activeRole} is capped at ${perms.maxDiscountPct}% line discount.`
       );
       return;
     }
@@ -327,166 +320,230 @@ export const PosTerminal: React.FC<PosTerminalProps> = ({
     }
   };
 
-  const handleUnlockPin = (e: React.FormEvent) => {
-    e.preventDefault();
-    const matched = onUnlockByPin(pinEntry.trim());
+  const attemptUnlock = (pinToCheck: string) => {
+    const matched = onUnlockByPin(pinToCheck.trim());
     if (matched) {
       setIsLocked(false);
       setPinEntry('');
       setPinError('');
     } else {
-      setPinError('Invalid 4-digit Employee PIN.');
+      setPinError('Invalid Employee PIN. Try again.');
     }
   };
 
-  const handleDownloadPosShortcut = (type: 'launcher' | 'cheatsheet') => {
-    const portalUrl =
-      typeof window !== 'undefined' ? `${window.location.origin}/?pos=1` : `https://${business.slug}.misafarms.com/`;
-    if (type === 'launcher') {
-      const html = `<!doctype html>
-<html>
-<head><meta charset="utf-8"><title>${business.name} — POS Terminal</title></head>
-<body style="font-family:sans-serif;text-align:center;padding:48px;">
-  <h2>${business.name} · ${store.name}</h2>
-  <p>Launching MisafaRMS Point of Sale (${store.registerId})...</p>
-  <p><a href="${portalUrl}">${portalUrl}</a></p>
-  <script>window.location.replace(${JSON.stringify(portalUrl)});</script>
-</body>
-</html>`;
-      const blob = new Blob([html], { type: 'text/html' });
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement('a');
-      a.href = url;
-      a.download = `${business.slug}-pos-shortcut.html`;
-      a.click();
-      URL.revokeObjectURL(url);
-    } else {
-      const txt = `MisafaRMS POS COUNTER SHORTCUTS & CONFIG
-Business: ${business.name} (${business.slug}.misafarms.com)
-Branch: ${store.name} (${store.code}) | Register: ${store.registerId}
-KRA eTIMS Serial: ${store.vscuSerial} | PIN: ${business.taxPin}
-
-KEYBOARD & WORKFLOW SHORTCUTS
-- Barcode Scan Box: Auto-focus + Enter adds SKU immediately
-- Hold Order: Park active customer basket and serve next buyer
-- Lock Terminal: Switch cashier shift via 4-digit Employee PIN
-- Enabled Payment Gateways: ${enabledGateways.map((g) => `${g.displayName} (${g.shortcodeOrTill})`).join(', ')}
-`;
-      const blob = new Blob([txt], { type: 'text/plain' });
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement('a');
-      a.href = url;
-      a.download = `${business.slug}-pos-shortcuts.txt`;
-      a.click();
-      URL.revokeObjectURL(url);
-    }
-  };
-
-  const handleSavePosCustomization = async (e: React.FormEvent) => {
+  const handleUnlockPinSubmit = (e: React.FormEvent) => {
     e.preventDefault();
-    setSavingConfig(true);
-    try {
-      await onUpdatePosConfig(draftConfig);
-      setShowCustomize(false);
-    } finally {
-      setSavingConfig(false);
-    }
+    attemptUnlock(pinEntry);
   };
 
-  const storeShiftTransactions = useMemo(
-    () => transactions.filter((t) => t.storeId === store.id),
-    [transactions, store.id]
-  );
+  const handlePadDigit = (digit: string) => {
+    if (pinEntry.length >= 8) return;
+    setPinError('');
+    const next = pinEntry + digit;
+    setPinEntry(next);
+  };
 
-  const shiftSummary = useMemo(() => {
-    let totalGross = 0;
-    let totalVat = 0;
-    const byGateway: Record<string, number> = {};
-    for (const tx of storeShiftTransactions) {
-      totalGross += tx.total;
-      totalVat += tx.taxAmount;
-      byGateway[tx.paymentMethod] = (byGateway[tx.paymentMethod] || 0) + tx.total;
-    }
-    return {
-      count: storeShiftTransactions.length,
-      totalGross,
-      totalVat,
-      byGateway,
-    };
-  }, [storeShiftTransactions]);
+  // Dedicated Full-Screen Employee PIN Login (nothing else shown!)
+  if (isLocked) {
+    return (
+      <div className="flex min-h-screen flex-col items-center justify-center bg-slate-100 px-4 py-8 text-slate-900 dark:bg-slate-950 dark:text-slate-100">
+        <div className="w-full max-w-sm rounded-2xl border border-slate-200 bg-white p-6 shadow-xl dark:border-slate-800 dark:bg-slate-900">
+          <div className="text-center">
+            <div className="mx-auto flex h-12 w-12 items-center justify-center rounded-xl bg-teal-50 dark:bg-teal-950/60">
+              <KeyRound className="h-6 w-6 text-teal-700 dark:text-teal-400" />
+            </div>
+            <h1 className="mt-3 font-display text-lg font-bold text-slate-900 dark:text-slate-100">
+              {business.name}
+            </h1>
+            <p className="mt-0.5 font-mono text-xs text-slate-500 dark:text-slate-400">
+              {store.name} · Register {store.registerId}
+            </p>
+            <p className="mt-2 text-xs font-medium text-slate-600 dark:text-slate-300">
+              Enter your 4-digit Employee PIN to open the POS
+            </p>
+          </div>
 
-  return (
-    <div className="relative space-y-4">
-      {/* POS Top Action Bar */}
-      <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-slate-200 bg-white px-4 py-3 dark:border-slate-800 dark:bg-slate-900">
-        <div>
-          <h1 className="font-display text-lg font-bold text-slate-900 dark:text-slate-100">
-            Point of Sale · {store.name}
-          </h1>
-          <p className="text-xs text-slate-500 tabular-nums dark:text-slate-400">
-            Operator: <strong className="text-slate-800 dark:text-slate-200">{activeEmployee?.name || activeRole}</strong> ({activeEmployee?.role || activeRole}, Max Disc {perms.maxDiscountPct}%) · Register {store.registerId}
-          </p>
-        </div>
-
-        <div className="flex flex-wrap items-center gap-2">
-          {heldCarts.map((h) => (
-            <button
-              key={h.id}
-              type="button"
-              onClick={() => handleRecallCart(h.id)}
-              className="inline-flex items-center gap-1.5 rounded-lg border border-amber-300 bg-amber-50 px-3 py-1.5 text-xs font-medium text-amber-800 hover:bg-amber-100 dark:border-amber-700 dark:bg-amber-950/60 dark:text-amber-300"
-            >
-              <PlayCircle className="h-3.5 w-3.5" />
-              <span>
-                Recall {h.id} ({h.lines.length})
-              </span>
-            </button>
-          ))}
-
-          <button
-            type="button"
-            onClick={() => handleDownloadPosShortcut('launcher')}
-            className="inline-flex items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-50 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-200"
-          >
-            <Download className="h-3.5 w-3.5 text-teal-700 dark:text-teal-400" />
-            <span>Download Shortcut</span>
-          </button>
-
-          {canCustomizePos && (
-            <button
-              type="button"
-              onClick={() => {
-                setDraftConfig(business.posConfig);
-                setShowCustomize(true);
+          <form onSubmit={handleUnlockPinSubmit} className="mt-5 space-y-4">
+            <input
+              type="password"
+              inputMode="numeric"
+              maxLength={8}
+              autoFocus
+              value={pinEntry}
+              onChange={(e) => {
+                setPinError('');
+                setPinEntry(e.target.value.replace(/[^0-9]/g, ''));
               }}
+              placeholder="••••"
+              className="w-full rounded-xl border border-slate-300 bg-slate-50 px-4 py-3 text-center font-mono text-2xl tracking-[0.45em] text-slate-900 focus:border-teal-600 focus:bg-white focus:outline-none dark:border-slate-700 dark:bg-slate-800 dark:text-slate-100"
+            />
+
+            {/* Tactile Numeric Counter Keypad */}
+            <div className="grid grid-cols-3 gap-2">
+              {['1', '2', '3', '4', '5', '6', '7', '8', '9'].map((d) => (
+                <button
+                  key={d}
+                  type="button"
+                  onClick={() => handlePadDigit(d)}
+                  className="rounded-xl border border-slate-200 bg-slate-50 py-3 font-mono text-base font-semibold text-slate-900 transition-colors hover:bg-slate-100 active:bg-slate-200 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-100 dark:hover:bg-slate-700"
+                >
+                  {d}
+                </button>
+              ))}
+              <button
+                type="button"
+                onClick={() => {
+                  setPinEntry('');
+                  setPinError('');
+                }}
+                className="rounded-xl border border-slate-200 bg-slate-50 py-3 text-xs font-semibold text-slate-600 hover:bg-slate-100 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-300"
+              >
+                Clear
+              </button>
+              <button
+                type="button"
+                onClick={() => handlePadDigit('0')}
+                className="rounded-xl border border-slate-200 bg-slate-50 py-3 font-mono text-base font-semibold text-slate-900 transition-colors hover:bg-slate-100 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-100"
+              >
+                0
+              </button>
+              <button
+                type="button"
+                onClick={() => setPinEntry((p) => p.slice(0, -1))}
+                aria-label="Backspace PIN digit"
+                className="flex items-center justify-center rounded-xl border border-slate-200 bg-slate-50 py-3 text-slate-600 hover:bg-slate-100 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-300"
+              >
+                <Delete className="h-4 w-4" />
+              </button>
+            </div>
+
+            {pinError && (
+              <p className="text-center text-xs font-medium text-rose-600 dark:text-rose-400">
+                {pinError}
+              </p>
+            )}
+
+            <button
+              type="submit"
+              className="w-full rounded-xl bg-teal-700 py-3 text-sm font-semibold text-white transition-colors hover:bg-teal-800 dark:bg-teal-600"
+            >
+              Sign In to POS
+            </button>
+
+            {/* Quick Staff PIN Demo Selector */}
+            <div className="border-t border-slate-100 pt-3 dark:border-slate-800">
+              <p className="text-[11px] font-medium text-slate-500 dark:text-slate-400">
+                Staff Demo PINs (tap to autofill):
+              </p>
+              <div className="mt-1.5 flex flex-wrap gap-1.5">
+                {employees.map((emp) => (
+                  <button
+                    key={emp.id}
+                    type="button"
+                    onClick={() => {
+                      setPinEntry(emp.pinCode);
+                      setPinError('');
+                    }}
+                    className="rounded-md border border-slate-200 bg-slate-50 px-2 py-1 font-mono text-[10px] text-slate-700 hover:border-teal-600 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-300"
+                  >
+                    {emp.name.split(' ')[0]} ({emp.role}): {emp.pinCode}
+                  </button>
+                ))}
+              </div>
+            </div>
+          </form>
+
+          {canExitToAdmin && onExitToAdmin && (
+            <div className="mt-4 border-t border-slate-100 pt-3 text-center dark:border-slate-800">
+              <button
+                type="button"
+                onClick={onExitToAdmin}
+                className="inline-flex items-center gap-1.5 text-xs font-medium text-slate-500 hover:text-slate-900 dark:text-slate-400 dark:hover:text-slate-200"
+              >
+                <ArrowLeft className="h-3.5 w-3.5" />
+                <span>Return to Admin Back Office</span>
+              </button>
+            </div>
+          )}
+        </div>
+      </div>
+    );
+  }
+
+  // Clean Full-Screen Counter POS Register (NO ERP TopBar, NO WorkspaceToolbar, NO Admin buttons!)
+  return (
+    <div className="min-h-screen bg-slate-100 text-slate-900 dark:bg-slate-950 dark:text-slate-100">
+      {/* Minimal Register Strip */}
+      <div className="border-b border-slate-200 bg-white px-4 py-2.5 sm:px-6 dark:border-slate-800 dark:bg-slate-900">
+        <div className="mx-auto flex max-w-[1440px] flex-wrap items-center justify-between gap-3">
+          <div className="flex flex-wrap items-center gap-2 text-xs">
+            <span className="font-display text-sm font-bold text-slate-900 dark:text-slate-100">
+              {store.name}
+            </span>
+            <span className="text-slate-400">·</span>
+            <span className="font-mono text-slate-600 dark:text-slate-400">
+              {store.registerId}
+            </span>
+            <span className="text-slate-400">·</span>
+            <span className="text-slate-700 dark:text-slate-300">
+              Cashier: <strong>{activeEmployee?.name || activeRole}</strong>
+            </span>
+          </div>
+
+          <div className="flex flex-wrap items-center gap-2">
+            {heldCarts.map((h) => (
+              <button
+                key={h.id}
+                type="button"
+                onClick={() => handleRecallCart(h.id)}
+                className="inline-flex items-center gap-1.5 rounded-lg border border-amber-300 bg-amber-50 px-3 py-1.5 text-xs font-medium text-amber-800 hover:bg-amber-100 dark:border-amber-700 dark:bg-amber-950/60 dark:text-amber-300"
+              >
+                <PlayCircle className="h-3.5 w-3.5" />
+                <span>
+                  Recall {h.id} ({h.lines.length})
+                </span>
+              </button>
+            ))}
+
+            <span className="inline-flex items-center gap-1.5 px-2 py-1 text-xs font-medium text-slate-600 dark:text-slate-300">
+              {isOffline ? (
+                <>
+                  <CloudOff className="h-3.5 w-3.5 text-amber-600" />
+                  <span>Offline Queue</span>
+                </>
+              ) : (
+                <>
+                  <Wifi className="h-3.5 w-3.5 text-emerald-600 dark:text-emerald-400" />
+                  <span>Connected</span>
+                </>
+              )}
+            </span>
+
+            <button
+              type="button"
+              onClick={() => setIsLocked(true)}
               className="inline-flex items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-50 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-200"
             >
-              <Settings2 className="h-3.5 w-3.5" />
-              <span>Customize POS</span>
+              <Lock className="h-3.5 w-3.5 text-amber-600" />
+              <span>Lock</span>
             </button>
-          )}
 
-          <button
-            type="button"
-            onClick={() => setIsLocked(true)}
-            className="inline-flex items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-50 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-200"
-          >
-            <Lock className="h-3.5 w-3.5 text-amber-600" />
-            <span>Switch PIN</span>
-          </button>
-
-          <button
-            type="button"
-            onClick={() => setShowZReport(true)}
-            className="inline-flex items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-50 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-200"
-          >
-            <FileSpreadsheet className="h-3.5 w-3.5" />
-            <span>X / Z Report</span>
-          </button>
+            {canExitToAdmin && onExitToAdmin && (
+              <button
+                type="button"
+                onClick={onExitToAdmin}
+                className="inline-flex items-center gap-1 rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-xs font-medium text-slate-600 hover:bg-slate-50 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-300"
+              >
+                <ArrowLeft className="h-3.5 w-3.5" />
+                <span>Back Office</span>
+              </button>
+            )}
+          </div>
         </div>
       </div>
 
-      <div className="grid grid-cols-1 gap-5 lg:grid-cols-12">
+      {/* Main POS Counter Workspace */}
+      <div className="mx-auto grid max-w-[1440px] grid-cols-1 gap-5 px-4 py-5 sm:px-6 lg:grid-cols-12">
         {/* Left: Fast Barcode + Product Catalog */}
         <div className="space-y-4 lg:col-span-7">
           <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
@@ -596,7 +653,7 @@ KEYBOARD & WORKFLOW SHORTCUTS
           </div>
         </div>
 
-        {/* Right: Active Cart & Customizable Payment Gateways */}
+        {/* Right: Active Cart & Payment Tender */}
         <div className="flex flex-col rounded-xl border border-slate-200 bg-white dark:border-slate-800 dark:bg-slate-900 lg:col-span-5">
           <div className="space-y-2.5 border-b border-slate-200 p-4 dark:border-slate-800">
             <div className="flex items-center justify-between">
@@ -652,15 +709,15 @@ KEYBOARD & WORKFLOW SHORTCUTS
 
           <div
             className="flex-1 divide-y divide-slate-100 overflow-y-auto px-4 dark:divide-slate-800"
-            style={{ maxHeight: '290px' }}
+            style={{ maxHeight: '300px' }}
           >
             {cart.length === 0 ? (
-              <div className="py-10 text-center">
+              <div className="py-12 text-center">
                 <p className="text-sm font-medium text-slate-700 dark:text-slate-300">
                   Register ready for next customer
                 </p>
                 <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">
-                  Click a product tile or scan a barcode.
+                  Tap a product tile or scan a barcode.
                 </p>
               </div>
             ) : (
@@ -745,7 +802,6 @@ KEYBOARD & WORKFLOW SHORTCUTS
               </div>
             </div>
 
-            {/* Dynamic Payment Gateway Grid */}
             <div className="grid grid-cols-2 gap-1.5 sm:grid-cols-3">
               {enabledGateways.map((gw) => {
                 const active = paymentMethod === gw.displayName;
@@ -860,66 +916,6 @@ KEYBOARD & WORKFLOW SHORTCUTS
         </div>
       </div>
 
-      {/* Employee 4-Digit POS PIN Lock Overlay */}
-      {isLocked && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/75 p-4 backdrop-blur-sm">
-          <div className="w-full max-w-sm rounded-2xl border border-slate-200 bg-white p-6 shadow-2xl dark:border-slate-800 dark:bg-slate-900">
-            <div className="flex items-center gap-2.5">
-              <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-teal-50 dark:bg-teal-950/60">
-                <KeyRound className="h-5 w-5 text-teal-700 dark:text-teal-400" />
-              </div>
-              <div>
-                <h3 className="font-display text-base font-bold text-slate-900 dark:text-slate-100">
-                  POS Terminal PIN Lock
-                </h3>
-                <p className="text-xs text-slate-500 dark:text-slate-400">
-                  Enter Employee 4-digit PIN to unlock shift
-                </p>
-              </div>
-            </div>
-
-            <form onSubmit={handleUnlockPin} className="mt-4 space-y-3">
-              <input
-                type="password"
-                inputMode="numeric"
-                maxLength={8}
-                autoFocus
-                value={pinEntry}
-                onChange={(e) => setPinEntry(e.target.value.replace(/[^0-9]/g, ''))}
-                placeholder="Enter PIN (e.g. 1234)"
-                className="w-full rounded-lg border border-slate-300 bg-slate-50 px-4 py-3 text-center font-mono text-lg tracking-widest text-slate-900 focus:border-teal-600 focus:outline-none dark:border-slate-700 dark:bg-slate-800 dark:text-slate-100"
-              />
-
-              {/* Quick Test PIN Selector */}
-              <div className="rounded-lg bg-slate-50 p-2.5 text-[11px] text-slate-600 dark:bg-slate-800/70 dark:text-slate-300">
-                <p className="font-semibold">Active Staff PINs:</p>
-                <div className="mt-1 flex flex-wrap gap-1.5">
-                  {employees.map((emp) => (
-                    <button
-                      key={emp.id}
-                      type="button"
-                      onClick={() => setPinEntry(emp.pinCode)}
-                      className="rounded border border-slate-200 bg-white px-2 py-0.5 font-mono text-[10px] hover:border-teal-600 dark:border-slate-700 dark:bg-slate-900"
-                    >
-                      {emp.name.split(' ')[0]} ({emp.role}): {emp.pinCode}
-                    </button>
-                  ))}
-                </div>
-              </div>
-
-              {pinError && <p className="text-xs font-medium text-rose-600">{pinError}</p>}
-
-              <button
-                type="submit"
-                className="w-full rounded-lg bg-teal-700 py-2.5 text-sm font-semibold text-white hover:bg-teal-800"
-              >
-                Unlock Register
-              </button>
-            </form>
-          </div>
-        </div>
-      )}
-
       {/* Printable 80mm / A4 Receipt + Email Dispatch Modal */}
       {completedReceipt && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/60 p-4 backdrop-blur-xs">
@@ -1009,7 +1005,6 @@ KEYBOARD & WORKFLOW SHORTCUTS
               </p>
             </div>
 
-            {/* Send Receipt to Email Form */}
             <form onSubmit={handleSendReceiptEmail} className="mt-4 flex items-center gap-2">
               <div className="relative flex-1">
                 <Mail className="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-slate-400" />
@@ -1053,218 +1048,6 @@ KEYBOARD & WORKFLOW SHORTCUTS
                 className="rounded-lg bg-teal-700 px-4 py-2 text-xs font-semibold text-white hover:bg-teal-800 dark:bg-teal-600"
               >
                 Next Customer
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* POS Customization & Shortcut Export Modal */}
-      {showCustomize && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/60 p-4 backdrop-blur-xs">
-          <div className="w-full max-w-lg rounded-xl border border-slate-200 bg-white p-6 shadow-xl dark:border-slate-800 dark:bg-slate-900">
-            <div className="flex items-center justify-between border-b border-slate-200 pb-3 dark:border-slate-800">
-              <h3 className="font-display text-base font-bold text-slate-900 dark:text-slate-100">
-                Customize POS & Export Counter Shortcuts
-              </h3>
-              <button
-                type="button"
-                onClick={() => setShowCustomize(false)}
-                className="rounded p-1 text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800"
-              >
-                <X className="h-4 w-4" />
-              </button>
-            </div>
-
-            <form onSubmit={handleSavePosCustomization} className="mt-4 space-y-3 text-xs">
-              <div>
-                <label className="block font-medium text-slate-700 dark:text-slate-300">
-                  Receipt Header Text
-                </label>
-                <input
-                  type="text"
-                  value={draftConfig.receiptHeader}
-                  onChange={(e) =>
-                    setDraftConfig((c) => ({ ...c, receiptHeader: e.target.value }))
-                  }
-                  className="mt-1 w-full rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-slate-900 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-100"
-                />
-              </div>
-
-              <div>
-                <label className="block font-medium text-slate-700 dark:text-slate-300">
-                  Receipt Footer Message
-                </label>
-                <input
-                  type="text"
-                  value={draftConfig.receiptFooter}
-                  onChange={(e) =>
-                    setDraftConfig((c) => ({ ...c, receiptFooter: e.target.value }))
-                  }
-                  className="mt-1 w-full rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-slate-900 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-100"
-                />
-              </div>
-
-              <div className="grid grid-cols-2 gap-3">
-                <div>
-                  <label className="block font-medium text-slate-700 dark:text-slate-300">
-                    Receipt Paper Format
-                  </label>
-                  <select
-                    value={draftConfig.paperWidth}
-                    onChange={(e) =>
-                      setDraftConfig((c) => ({
-                        ...c,
-                        paperWidth: e.target.value as '80mm' | 'A4',
-                      }))
-                    }
-                    className="mt-1 w-full rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-slate-900 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-100"
-                  >
-                    <option value="80mm">80mm Thermal Roll</option>
-                    <option value="A4">A4 Tax Invoice</option>
-                  </select>
-                </div>
-
-                <div>
-                  <label className="block font-medium text-slate-700 dark:text-slate-300">
-                    Catalog Grid Density
-                  </label>
-                  <select
-                    value={draftConfig.gridDensity}
-                    onChange={(e) =>
-                      setDraftConfig((c) => ({
-                        ...c,
-                        gridDensity: e.target.value as 'comfortable' | 'compact',
-                      }))
-                    }
-                    className="mt-1 w-full rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-slate-900 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-100"
-                  >
-                    <option value="comfortable">Comfortable (With Photos)</option>
-                    <option value="compact">Compact (High-Speed Counter)</option>
-                  </select>
-                </div>
-              </div>
-
-              <div className="flex flex-wrap gap-4 pt-1">
-                <label className="inline-flex items-center gap-2">
-                  <input
-                    type="checkbox"
-                    checked={draftConfig.barcodeAutoFocus}
-                    onChange={(e) =>
-                      setDraftConfig((c) => ({ ...c, barcodeAutoFocus: e.target.checked }))
-                    }
-                  />
-                  <span>Auto-Focus Barcode Scanner</span>
-                </label>
-
-                <label className="inline-flex items-center gap-2">
-                  <input
-                    type="checkbox"
-                    checked={draftConfig.requirePinPerShift}
-                    onChange={(e) =>
-                      setDraftConfig((c) => ({ ...c, requirePinPerShift: e.target.checked }))
-                    }
-                  />
-                  <span>Require Employee PIN on Open</span>
-                </label>
-              </div>
-
-              <div className="flex flex-wrap items-center justify-between gap-2 border-t border-slate-200 pt-3 dark:border-slate-800">
-                <div className="flex items-center gap-2">
-                  <button
-                    type="button"
-                    onClick={() => handleDownloadPosShortcut('launcher')}
-                    className="inline-flex items-center gap-1 rounded-lg border border-slate-200 px-3 py-1.5 font-medium text-slate-700 hover:bg-slate-50 dark:border-slate-700 dark:text-slate-200"
-                  >
-                    <Download className="h-3.5 w-3.5" />
-                    <span>POS Shortcut (.html)</span>
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => handleDownloadPosShortcut('cheatsheet')}
-                    className="inline-flex items-center gap-1 rounded-lg border border-slate-200 px-3 py-1.5 font-medium text-slate-700 hover:bg-slate-50 dark:border-slate-700 dark:text-slate-200"
-                  >
-                    <Download className="h-3.5 w-3.5" />
-                    <span>Key Guide (.txt)</span>
-                  </button>
-                </div>
-
-                <button
-                  type="submit"
-                  disabled={savingConfig}
-                  className="rounded-lg bg-teal-700 px-4 py-2 font-semibold text-white hover:bg-teal-800 dark:bg-teal-600"
-                >
-                  {savingConfig ? 'Saving...' : 'Save Customization'}
-                </button>
-              </div>
-            </form>
-          </div>
-        </div>
-      )}
-
-      {/* Dynamics RMS X / Z Shift Report Drawer */}
-      {showZReport && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/60 p-4 backdrop-blur-xs">
-          <div className="w-full max-w-lg rounded-xl border border-slate-200 bg-white p-6 shadow-xl dark:border-slate-800 dark:bg-slate-900">
-            <div className="flex items-center justify-between border-b border-slate-200 pb-3 dark:border-slate-800">
-              <div>
-                <h3 className="font-display text-base font-bold text-slate-900 dark:text-slate-100">
-                  Dynamics RMS · X/Z Shift Reconciliation
-                </h3>
-                <p className="text-xs text-slate-500 dark:text-slate-400">
-                  {store.name} · Register {store.registerId}
-                </p>
-              </div>
-              <button
-                type="button"
-                onClick={() => setShowZReport(false)}
-                className="rounded p-1 text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800"
-              >
-                <X className="h-4 w-4" />
-              </button>
-            </div>
-
-            <div className="mt-4 space-y-3 text-xs">
-              <div className="grid grid-cols-2 gap-3 rounded-lg bg-slate-50 p-3 dark:bg-slate-800/60">
-                <div>
-                  <span className="text-slate-500 dark:text-slate-400">Shift Receipts</span>
-                  <p className="font-mono text-lg font-bold tabular-nums text-slate-900 dark:text-slate-100">
-                    {shiftSummary.count}
-                  </p>
-                </div>
-                <div>
-                  <span className="text-slate-500 dark:text-slate-400">Gross Shift Revenue</span>
-                  <p className="font-mono text-lg font-bold tabular-nums text-teal-700 dark:text-teal-400">
-                    {formatMoney(shiftSummary.totalGross, business.currency)}
-                  </p>
-                </div>
-              </div>
-
-              <div className="divide-y divide-slate-100 dark:divide-slate-800">
-                {Object.entries(shiftSummary.byGateway).map(([method, amt]) => (
-                  <div key={method} className="flex justify-between py-2">
-                    <span className="text-slate-600 dark:text-slate-400">{method}</span>
-                    <span className="font-mono font-medium tabular-nums">
-                      {formatMoney(amt, business.currency)}
-                    </span>
-                  </div>
-                ))}
-                <div className="flex justify-between py-2 font-semibold">
-                  <span>KRA eTIMS Output VAT ({business.vatRate}%)</span>
-                  <span className="font-mono tabular-nums">
-                    {formatMoney(shiftSummary.totalVat, business.currency)}
-                  </span>
-                </div>
-              </div>
-            </div>
-
-            <div className="mt-5 flex justify-end gap-2">
-              <button
-                type="button"
-                onClick={() => setShowZReport(false)}
-                className="rounded-lg bg-slate-900 px-4 py-2 text-xs font-semibold text-white dark:bg-teal-600"
-              >
-                Close Report
               </button>
             </div>
           </div>

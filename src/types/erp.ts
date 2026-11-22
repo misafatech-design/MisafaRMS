@@ -238,6 +238,7 @@ export interface AppModuleMeta {
   portalVisible?: boolean;
   specialView?:
     | 'pos'
+    | 'pos_admin'
     | 'etims'
     | 'analytics'
     | 'studio'

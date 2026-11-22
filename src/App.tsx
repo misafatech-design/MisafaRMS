@@ -11,6 +11,7 @@ import { LandingPage } from './components/LandingPage';
 import { ModuleWorkspace } from './components/ModuleWorkspace';
 import { OnboardingWizardModal } from './components/OnboardingWizardModal';
 import { PaymentGatewaysView } from './components/PaymentGatewaysView';
+import { PosAdminConsole } from './components/PosAdminConsole';
 import { PosTerminal } from './components/PosTerminal';
 import { StudioView } from './components/StudioView';
 import { PrimaryWorkspaceTab, TopBar } from './components/TopBar';
@@ -100,6 +101,7 @@ function MisafaWorkspaceApp() {
     new URLSearchParams(window.location.search).get('pos') === '1';
 
   const [showLanding, setShowLanding] = useState(!initialPosShortcut);
+  const [posKioskMode, setPosKioskMode] = useState(initialPosShortcut);
   const [firebaseUser, setFirebaseUser] = useState<User | null>(null);
   const [authBanner, setAuthBanner] = useState('');
 
@@ -930,11 +932,22 @@ function MisafaWorkspaceApp() {
             handleSelectBusiness('biz-savannah');
             setAccountTier('admin');
             setActiveRole('Owner');
+            setPosKioskMode(false);
             setTopTab('apps');
             setSelectedModule(null);
             setShowLanding(false);
           }}
+          onEmployeePosLogin={() => {
+            handleSelectBusiness('biz-savannah');
+            setAccountTier('employee');
+            setActiveRole('Cashier');
+            setPosKioskMode(true);
+            setSelectedModule(null);
+            setTopTab('pos');
+            setShowLanding(false);
+          }}
           onStartFreeOnboarding={() => {
+            setPosKioskMode(false);
             setShowLanding(false);
             setWizardOpen(true);
           }}
@@ -944,12 +957,16 @@ function MisafaWorkspaceApp() {
               businesses.find((b) => b.slug.toLowerCase() === slug.toLowerCase()) ||
               businesses[0];
             handleSelectBusiness(matched.id);
+            setPosKioskMode(false);
             setTopTab('apps');
             setSelectedModule(null);
             setShowLanding(false);
           }}
           firebaseUserEmail={firebaseUser?.email}
-          onContinueSignedIn={() => setShowLanding(false)}
+          onContinueSignedIn={() => {
+            setPosKioskMode(false);
+            setShowLanding(false);
+          }}
         />
         <OnboardingWizardModal
           isOpen={wizardOpen}
@@ -957,6 +974,36 @@ function MisafaWorkspaceApp() {
           onCreateBusiness={handleCreateBusiness}
         />
       </>
+    );
+  }
+
+  // Dedicated full-screen POS register mode: NO ERP TopBar, NO WorkspaceToolbar, NO Admin configuration buttons
+  if (!selectedModule && topTab === 'pos') {
+    return (
+      <PosTerminal
+        business={activeBusiness}
+        store={activeStore}
+        products={businessProducts}
+        employees={businessEmployees}
+        activeEmployee={activeEmployee}
+        onUnlockByPin={(pin) => {
+          const matched = handleUnlockByPin(pin);
+          if (matched && accountTier !== 'admin') {
+            setPosKioskMode(true);
+          }
+          return matched;
+        }}
+        activeRole={activeRole}
+        isOffline={isOffline}
+        canExitToAdmin={accountTier === 'admin' && !posKioskMode}
+        onExitToAdmin={() => {
+          setSelectedModule(null);
+          setTopTab('apps');
+        }}
+        initialLocked={true}
+        onCompleteCheckout={handleCheckout}
+        onEmailReceipt={handleEmailReceipt}
+      />
     );
   }
 
@@ -1060,6 +1107,18 @@ function MisafaWorkspaceApp() {
               onCreateModel={handleCreateStudioModel}
               onCreateAutomation={handleCreateAutomation}
             />
+          ) : selectedModule.specialView === 'pos_admin' ? (
+            <PosAdminConsole
+              business={activeBusiness}
+              stores={businessStores}
+              activeStore={activeStore}
+              transactions={businessTransactions}
+              onUpdatePosConfig={handleUpdatePosConfig}
+              onLaunchPosRegister={() => {
+                setSelectedModule(null);
+                setTopTab('pos');
+              }}
+            />
           ) : selectedModule.specialView === 'payments' ? (
             <PaymentGatewaysView
               business={activeBusiness}
@@ -1102,22 +1161,6 @@ function MisafaWorkspaceApp() {
               onCreateRecord={handleCreateErpRecord}
             />
           )
-        ) : topTab === 'pos' ? (
-          <PosTerminal
-            business={activeBusiness}
-            store={activeStore}
-            products={businessProducts}
-            transactions={businessTransactions}
-            employees={businessEmployees}
-            activeEmployee={activeEmployee}
-            onUnlockByPin={handleUnlockByPin}
-            accountTier={accountTier}
-            activeRole={activeRole}
-            isOffline={isOffline}
-            onUpdatePosConfig={handleUpdatePosConfig}
-            onEmailReceipt={handleEmailReceipt}
-            onCompleteCheckout={handleCheckout}
-          />
         ) : topTab === 'etims' ? (
           <EtimsComplianceView
             business={activeBusiness}

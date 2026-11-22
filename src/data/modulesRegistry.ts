@@ -423,6 +423,17 @@ export const APP_MODULES: AppModuleMeta[] = [
     kenyaHighlight: 'Full eTIMS Reports',
   },
   {
+    id: 'pos_settings',
+    name: 'POS Setup & Z-Reports',
+    category: 'Kenya & Enterprise',
+    description: 'Customize POS receipts, download counter shortcuts & pull X/Z shift reports',
+    iconName: 'SlidersHorizontal',
+    accentColor: 'text-teal-700 dark:text-teal-400',
+    specialView: 'pos_admin',
+    kenyaHighlight: 'Shortcuts · Receipts · Z-Reports',
+    adminOnly: true,
+  },
+  {
     id: 'payment_gateways',
     name: 'Payment Gateways',
     category: 'Kenya & Enterprise',

@@ -20,7 +20,7 @@ export const DEFAULT_POS_CONFIG: PosCustomizationConfig = {
   gridDensity: 'comfortable',
   barcodeAutoFocus: true,
   soundBeep: true,
-  requirePinPerShift: false,
+  requirePinPerShift: true,
   quickCashNotes: [500, 1000, 2000, 5000],
 };
 
@@ -127,6 +127,7 @@ export const SEED_BUSINESSES: BusinessEntity[] = [
     paybillOrTill: 'Till 910442',
     installedModuleIds: [
       'pos',
+      'pos_settings',
       'inventory',
       'purchase',
       'invoicing',
@@ -157,6 +158,7 @@ export const SEED_BUSINESSES: BusinessEntity[] = [
     paybillOrTill: 'Stripe Terminal · Faster Payments',
     installedModuleIds: [
       'pos',
+      'pos_settings',
       'ecommerce',
       'website',
       'inventory',
