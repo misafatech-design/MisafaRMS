@@ -1,0 +1,147 @@
+{
+  "entities": {
+    "UserAccount": {
+      "title": "UserAccount",
+      "description": "Authenticated user account classification (admin, employee, or portal user)",
+      "type": "object",
+      "properties": {
+        "uid": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "displayName": { "type": "string", "minLength": 1, "maxLength": 100 },
+        "accountType": { "type": "string", "enum": ["admin", "employee", "user"] },
+        "activeBusinessId": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["uid", "displayName", "accountType", "createdAt"]
+    },
+    "UserPrivateProfile": {
+      "title": "UserPrivateProfile",
+      "description": "Isolated PII document for user email and phone number",
+      "type": "object",
+      "properties": {
+        "uid": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "email": { "type": "string", "maxLength": 160 },
+        "phone": { "type": "string", "maxLength": 40 },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["uid", "email"]
+    },
+    "BusinessEntity": {
+      "title": "BusinessEntity",
+      "description": "Multi-store retail business tenant with Kenya eTIMS and module settings",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "ownerId": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "slug": { "type": "string", "minLength": 2, "maxLength": 64, "pattern": "^[a-z0-9\\-]+$" },
+        "name": { "type": "string", "minLength": 1, "maxLength": 120 },
+        "country": { "type": "string", "enum": ["KE", "UG", "TZ", "GB", "US"] },
+        "currency": { "type": "string", "enum": ["KES", "UGX", "TZS", "GBP", "USD"] },
+        "taxPin": { "type": "string", "minLength": 3, "maxLength": 40 },
+        "vatRate": { "type": "number" },
+        "etimsEnabled": { "type": "boolean" },
+        "etimsMode": { "type": "string", "enum": ["OSCU", "VSCU", "Standard"] },
+        "installedModuleIds": { "type": "array" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["id", "ownerId", "slug", "name", "country", "currency", "taxPin", "createdAt"]
+    },
+    "EmployeeRecord": {
+      "title": "EmployeeRecord",
+      "description": "Business employee with POS PIN, store assignment, and RBAC permission tier",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "ownerId": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "name": { "type": "string", "minLength": 1, "maxLength": 100 },
+        "role": { "type": "string", "enum": ["Owner", "Store Manager", "Cashier", "Inventory Clerk", "Accountant", "Field Agent"] },
+        "pinCode": { "type": "string", "minLength": 4, "maxLength": 8, "pattern": "^[0-9]{4,8}$" },
+        "branchId": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "grossSalary": { "type": "number" },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["id", "ownerId", "name", "role", "pinCode", "branchId", "createdAt"]
+    },
+    "ProductItem": {
+      "title": "ProductItem",
+      "description": "Retail SKU with KRA tax code and per-branch inventory levels",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "ownerId": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "sku": { "type": "string", "minLength": 1, "maxLength": 60 },
+        "name": { "type": "string", "minLength": 1, "maxLength": 140 },
+        "category": { "type": "string", "minLength": 1, "maxLength": 60 },
+        "price": { "type": "number" },
+        "taxCode": { "type": "string", "enum": ["B_16", "E_0", "A_EXEMPT"] }
+      },
+      "required": ["id", "ownerId", "sku", "name", "price", "taxCode"]
+    },
+    "SaleTransaction": {
+      "title": "SaleTransaction",
+      "description": "POS, Field Agent, or eCommerce fiscal transaction with KRA eTIMS CUIN",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "ownerId": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "receiptNo": { "type": "string", "minLength": 1, "maxLength": 60 },
+        "storeId": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "total": { "type": "number" },
+        "taxAmount": { "type": "number" },
+        "etimsCuin": { "type": "string", "minLength": 1, "maxLength": 80 },
+        "etimsStatus": { "type": "string", "enum": ["Transmitted", "Queued Offline", "Pending Retry", "Credit Note"] },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["id", "ownerId", "receiptNo", "storeId", "total", "etimsCuin", "etimsStatus", "createdAt"]
+    },
+    "ErpRecord": {
+      "title": "ErpRecord",
+      "description": "Generic operational record linked to any of the 50 installed Odoo/Dynamics modules",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "ownerId": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "moduleId": { "type": "string", "minLength": 1, "maxLength": 60 },
+        "title": { "type": "string", "minLength": 1, "maxLength": 140 },
+        "status": { "type": "string", "minLength": 1, "maxLength": 60 },
+        "date": { "type": "string", "maxLength": 30 }
+      },
+      "required": ["id", "ownerId", "moduleId", "title", "status", "date"]
+    }
+  },
+  "firestore": {
+    "/admins/{userId}": {
+      "schema": { "$ref": "#/entities/UserAccount" },
+      "description": "Trusted administrator lookup documents"
+    },
+    "/users/{userId}": {
+      "schema": { "$ref": "#/entities/UserAccount" },
+      "description": "Public account classification without PII"
+    },
+    "/users/{userId}/private/{docId}": {
+      "schema": { "$ref": "#/entities/UserPrivateProfile" },
+      "description": "Isolated PII profile (email and phone)"
+    },
+    "/businesses/{businessId}": {
+      "schema": { "$ref": "#/entities/BusinessEntity" },
+      "description": "Multi-tenant business workspace root"
+    },
+    "/businesses/{businessId}/employees/{employeeId}": {
+      "schema": { "$ref": "#/entities/EmployeeRecord" },
+      "description": "Business employees and POS PIN credentials"
+    },
+    "/businesses/{businessId}/products/{productId}": {
+      "schema": { "$ref": "#/entities/ProductItem" },
+      "description": "Business inventory SKUs"
+    },
+    "/businesses/{businessId}/transactions/{txId}": {
+      "schema": { "$ref": "#/entities/SaleTransaction" },
+      "description": "Fiscal POS and eTIMS transactions"
+    },
+    "/businesses/{businessId}/erpRecords/{recordId}": {
+      "schema": { "$ref": "#/entities/ErpRecord" },
+      "description": "Records across installed Odoo/Dynamics ERP modules"
+    }
+  }
+}

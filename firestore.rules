@@ -1,0 +1,302 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // Global safety net: deny everything by default
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // Core primitives
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isVerifiedUser() {
+      return isSignedIn() && request.auth.token.email_verified == true;
+    }
+
+    function isAdmin() {
+      return isVerifiedUser() && (
+        exists(/databases/$(database)/documents/admins/$(request.auth.uid)) ||
+        request.auth.token.email == 'misafatech@gmail.com'
+      );
+    }
+
+    function isOwnerUid(uid) {
+      return isSignedIn() && request.auth.uid == uid;
+    }
+
+    function isValidId(id) {
+      return id is string && id.size() >= 1 && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    function incoming() {
+      return request.resource.data;
+    }
+
+    function existing() {
+      return resource.data;
+    }
+
+    function isBusinessOwner(businessId) {
+      return exists(/databases/$(database)/documents/businesses/$(businessId)) &&
+        get(/databases/$(database)/documents/businesses/$(businessId)).data.ownerId == request.auth.uid;
+    }
+
+    // Validation helpers
+    function isValidUserAccount(data) {
+      return data.keys().hasAll(['uid', 'displayName', 'accountType', 'createdAt']) &&
+        data.keys().hasOnly(['uid', 'displayName', 'accountType', 'activeBusinessId', 'createdAt', 'updatedAt']) &&
+        isValidId(data.uid) &&
+        data.displayName is string && data.displayName.size() >= 1 && data.displayName.size() <= 100 &&
+        data.accountType in ['admin', 'employee', 'user'] &&
+        data.createdAt is string && data.createdAt.size() <= 40 &&
+        (!('activeBusinessId' in data) || (data.activeBusinessId is string && data.activeBusinessId.size() <= 128)) &&
+        (!('updatedAt' in data) || (data.updatedAt is string && data.updatedAt.size() <= 40));
+    }
+
+    function isValidPrivateProfile(data) {
+      return data.keys().hasAll(['uid', 'email']) &&
+        data.keys().hasOnly(['uid', 'email', 'phone', 'updatedAt']) &&
+        isValidId(data.uid) &&
+        data.email is string && data.email.size() >= 3 && data.email.size() <= 160 &&
+        (!('phone' in data) || (data.phone is string && data.phone.size() <= 40)) &&
+        (!('updatedAt' in data) || (data.updatedAt is string && data.updatedAt.size() <= 40));
+    }
+
+    function isValidBusiness(data) {
+      return data.keys().hasAll(['id', 'ownerId', 'slug', 'name', 'country', 'currency', 'taxPin', 'createdAt']) &&
+        data.keys().hasOnly([
+          'id', 'ownerId', 'slug', 'name', 'country', 'currency', 'taxAuthority',
+          'taxPin', 'vatRate', 'etimsEnabled', 'etimsMode', 'paybillOrTill',
+          'installedModuleIds', 'posConfig', 'paymentGateways', 'createdAt', 'updatedAt'
+        ]) &&
+        isValidId(data.id) &&
+        isValidId(data.ownerId) &&
+        data.slug is string && data.slug.size() >= 2 && data.slug.size() <= 64 && data.slug.matches('^[a-z0-9\\-]+$') &&
+        data.name is string && data.name.size() >= 1 && data.name.size() <= 120 &&
+        data.country in ['KE', 'UG', 'TZ', 'GB', 'US'] &&
+        data.currency in ['KES', 'UGX', 'TZS', 'GBP', 'USD'] &&
+        data.taxPin is string && data.taxPin.size() >= 3 && data.taxPin.size() <= 40 &&
+        (!('vatRate' in data) || (data.vatRate is number && data.vatRate >= 0 && data.vatRate <= 50)) &&
+        (!('etimsEnabled' in data) || data.etimsEnabled is bool) &&
+        (!('etimsMode' in data) || data.etimsMode in ['OSCU', 'VSCU', 'Standard']) &&
+        (!('taxAuthority' in data) || (data.taxAuthority is string && data.taxAuthority.size() <= 100)) &&
+        (!('paybillOrTill' in data) || (data.paybillOrTill is string && data.paybillOrTill.size() <= 120)) &&
+        (!('installedModuleIds' in data) || (data.installedModuleIds is list && data.installedModuleIds.size() <= 80 && (data.installedModuleIds.size() == 0 || data.installedModuleIds[0] is string))) &&
+        (!('posConfig' in data) || data.posConfig is map) &&
+        (!('paymentGateways' in data) || data.paymentGateways is list) &&
+        data.createdAt is string && data.createdAt.size() <= 40 &&
+        (!('updatedAt' in data) || (data.updatedAt is string && data.updatedAt.size() <= 40));
+    }
+
+    function isValidEmployee(data) {
+      return data.keys().hasAll(['id', 'ownerId', 'name', 'role', 'pinCode', 'branchId', 'createdAt']) &&
+        data.keys().hasOnly(['id', 'ownerId', 'name', 'role', 'pinCode', 'branchId', 'grossSalary', 'email', 'active', 'createdAt']) &&
+        isValidId(data.id) &&
+        isValidId(data.ownerId) &&
+        data.name is string && data.name.size() >= 1 && data.name.size() <= 100 &&
+        data.role in ['Owner', 'Store Manager', 'Cashier', 'Inventory Clerk', 'Accountant', 'Field Agent'] &&
+        data.pinCode is string && data.pinCode.size() >= 4 && data.pinCode.size() <= 8 && data.pinCode.matches('^[0-9]{4,8}$') &&
+        data.branchId is string && data.branchId.size() >= 1 && data.branchId.size() <= 128 &&
+        (!('grossSalary' in data) || (data.grossSalary is number && data.grossSalary >= 0)) &&
+        (!('email' in data) || (data.email is string && data.email.size() <= 160)) &&
+        (!('active' in data) || data.active is bool) &&
+        data.createdAt is string && data.createdAt.size() <= 40;
+    }
+
+    function isValidProduct(data) {
+      return data.keys().hasAll(['id', 'ownerId', 'sku', 'name', 'price', 'taxCode']) &&
+        data.keys().hasOnly(['id', 'ownerId', 'businessId', 'sku', 'barcode', 'name', 'category', 'price', 'cost', 'taxCode', 'unit', 'reorderPoint', 'imageUrl', 'variants', 'stockByStore']) &&
+        isValidId(data.id) &&
+        isValidId(data.ownerId) &&
+        data.sku is string && data.sku.size() >= 1 && data.sku.size() <= 60 &&
+        data.name is string && data.name.size() >= 1 && data.name.size() <= 140 &&
+        data.price is number && data.price >= 0 &&
+        data.taxCode in ['B_16', 'E_0', 'A_EXEMPT'] &&
+        (!('businessId' in data) || (data.businessId is string && data.businessId.size() <= 128)) &&
+        (!('barcode' in data) || (data.barcode is string && data.barcode.size() <= 60)) &&
+        (!('category' in data) || (data.category is string && data.category.size() <= 60)) &&
+        (!('cost' in data) || (data.cost is number && data.cost >= 0)) &&
+        (!('unit' in data) || (data.unit is string && data.unit.size() <= 30)) &&
+        (!('reorderPoint' in data) || data.reorderPoint is number) &&
+        (!('imageUrl' in data) || (data.imageUrl is string && data.imageUrl.size() <= 300)) &&
+        (!('variants' in data) || (data.variants is list && data.variants.size() <= 20)) &&
+        (!('stockByStore' in data) || data.stockByStore is map);
+    }
+
+    function isValidTransaction(data) {
+      return data.keys().hasAll(['id', 'ownerId', 'receiptNo', 'storeId', 'total', 'etimsCuin', 'etimsStatus', 'createdAt']) &&
+        data.keys().hasOnly([
+          'id', 'ownerId', 'receiptNo', 'businessId', 'storeId', 'storeName', 'cashierRole',
+          'cashierName', 'customerName', 'customerPin', 'customerPhone', 'customerEmail',
+          'channel', 'paymentMethod', 'paymentRef', 'currency', 'subtotal', 'taxAmount',
+          'discountTotal', 'total', 'amountTendered', 'changeDue', 'etimsCuin', 'etimsStatus',
+          'etimsQrData', 'lines', 'createdAt', 'syncedAt', 'encryptedOffline', 'emailedTo'
+        ]) &&
+        isValidId(data.id) &&
+        isValidId(data.ownerId) &&
+        data.receiptNo is string && data.receiptNo.size() >= 1 && data.receiptNo.size() <= 60 &&
+        data.storeId is string && data.storeId.size() >= 1 && data.storeId.size() <= 128 &&
+        data.total is number &&
+        data.etimsCuin is string && data.etimsCuin.size() >= 1 && data.etimsCuin.size() <= 80 &&
+        data.etimsStatus in ['Transmitted', 'Queued Offline', 'Pending Retry', 'Credit Note'] &&
+        data.createdAt is string && data.createdAt.size() <= 40 &&
+        (!('lines' in data) || (data.lines is list && data.lines.size() <= 200));
+    }
+
+    function isValidErpRecord(data) {
+      return data.keys().hasAll(['id', 'ownerId', 'moduleId', 'title', 'status', 'date']) &&
+        data.keys().hasOnly(['id', 'ownerId', 'moduleId', 'businessId', 'title', 'subtitle', 'status', 'amount', 'currency', 'date', 'meta']) &&
+        isValidId(data.id) &&
+        isValidId(data.ownerId) &&
+        data.moduleId is string && data.moduleId.size() >= 1 && data.moduleId.size() <= 60 &&
+        data.title is string && data.title.size() >= 1 && data.title.size() <= 140 &&
+        data.status is string && data.status.size() >= 1 && data.status.size() <= 60 &&
+        data.date is string && data.date.size() <= 30 &&
+        (!('subtitle' in data) || (data.subtitle is string && data.subtitle.size() <= 240)) &&
+        (!('amount' in data) || data.amount is number) &&
+        (!('currency' in data) || (data.currency is string && data.currency.size() <= 10)) &&
+        (!('meta' in data) || data.meta is map);
+    }
+
+    // Connection test doc
+    match /test/connection {
+      allow get: if isSignedIn();
+    }
+
+    // Admin registry
+    match /admins/{userId} {
+      allow get: if isOwnerUid(userId) || isAdmin();
+      allow create, update, delete: if isAdmin() && isValidId(userId);
+    }
+
+    // User accounts & isolated private PII
+    match /users/{userId} {
+      allow get: if isOwnerUid(userId) || isAdmin();
+      allow list: if isAdmin();
+      allow create: if isVerifiedUser() &&
+        isValidId(userId) &&
+        isOwnerUid(userId) &&
+        isValidUserAccount(incoming()) &&
+        incoming().uid == request.auth.uid &&
+        (incoming().accountType in ['employee', 'user'] || isAdmin());
+      allow update: if isVerifiedUser() &&
+        isValidId(userId) &&
+        isValidUserAccount(incoming()) &&
+        incoming().uid == existing().uid &&
+        incoming().createdAt == existing().createdAt &&
+        (
+          isAdmin() ||
+          (isOwnerUid(userId) && incoming().accountType == existing().accountType && incoming().diff(existing()).affectedKeys().hasOnly(['displayName', 'activeBusinessId', 'updatedAt']))
+        );
+      allow delete: if isAdmin() && isValidId(userId);
+
+      match /private/{docId} {
+        allow get: if (isOwnerUid(userId) || isAdmin()) && isValidId(docId);
+        allow create, update: if isVerifiedUser() &&
+          isValidId(userId) &&
+          isValidId(docId) &&
+          (isOwnerUid(userId) || isAdmin()) &&
+          isValidPrivateProfile(incoming()) &&
+          incoming().uid == userId;
+        allow delete: if isAdmin() && isValidId(userId) && isValidId(docId);
+      }
+    }
+
+    // Multi-tenant Businesses
+    match /businesses/{businessId} {
+      allow get: if isSignedIn() && isValidId(businessId) && (existing().ownerId == request.auth.uid || isAdmin());
+      allow list: if isSignedIn() && (resource.data.ownerId == request.auth.uid || isAdmin());
+      allow create: if isVerifiedUser() &&
+        isValidId(businessId) &&
+        isValidBusiness(incoming()) &&
+        incoming().ownerId == request.auth.uid;
+      allow update: if isVerifiedUser() &&
+        isValidId(businessId) &&
+        isValidBusiness(incoming()) &&
+        incoming().id == existing().id &&
+        incoming().ownerId == existing().ownerId &&
+        incoming().createdAt == existing().createdAt &&
+        (
+          isAdmin() ||
+          (existing().ownerId == request.auth.uid && incoming().diff(existing()).affectedKeys().hasOnly(['name', 'taxPin', 'vatRate', 'etimsEnabled', 'etimsMode', 'paybillOrTill', 'installedModuleIds', 'posConfig', 'paymentGateways', 'updatedAt']))
+        );
+      allow delete: if isAdmin() && isValidId(businessId);
+
+      // Employees subcollection
+      match /employees/{employeeId} {
+        allow get: if isSignedIn() && isValidId(employeeId) && (existing().ownerId == request.auth.uid || isAdmin());
+        allow list: if isSignedIn() && (resource.data.ownerId == request.auth.uid || isAdmin());
+        allow create: if isVerifiedUser() &&
+          isValidId(employeeId) &&
+          isValidEmployee(incoming()) &&
+          incoming().ownerId == request.auth.uid &&
+          isBusinessOwner(businessId);
+        allow update: if isVerifiedUser() &&
+          isValidId(employeeId) &&
+          isValidEmployee(incoming()) &&
+          incoming().ownerId == existing().ownerId &&
+          incoming().createdAt == existing().createdAt &&
+          (isAdmin() || (existing().ownerId == request.auth.uid && incoming().diff(existing()).affectedKeys().hasOnly(['name', 'role', 'pinCode', 'branchId', 'grossSalary', 'email', 'active'])));
+        allow delete: if isVerifiedUser() && isValidId(employeeId) && (existing().ownerId == request.auth.uid || isAdmin());
+      }
+
+      // Products subcollection
+      match /products/{productId} {
+        allow get: if isSignedIn() && isValidId(productId) && (existing().ownerId == request.auth.uid || isAdmin());
+        allow list: if isSignedIn() && (resource.data.ownerId == request.auth.uid || isAdmin());
+        allow create: if isVerifiedUser() &&
+          isValidId(productId) &&
+          isValidProduct(incoming()) &&
+          incoming().ownerId == request.auth.uid &&
+          isBusinessOwner(businessId);
+        allow update: if isVerifiedUser() &&
+          isValidId(productId) &&
+          isValidProduct(incoming()) &&
+          incoming().ownerId == existing().ownerId &&
+          (isAdmin() || (existing().ownerId == request.auth.uid && incoming().diff(existing()).affectedKeys().hasOnly(['name', 'price', 'cost', 'taxCode', 'category', 'reorderPoint', 'stockByStore', 'variants'])));
+        allow delete: if isVerifiedUser() && isValidId(productId) && (existing().ownerId == request.auth.uid || isAdmin());
+      }
+
+      // Transactions subcollection
+      match /transactions/{txId} {
+        allow get: if isSignedIn() && isValidId(txId) && (existing().ownerId == request.auth.uid || isAdmin());
+        allow list: if isSignedIn() && (resource.data.ownerId == request.auth.uid || isAdmin());
+        allow create: if isVerifiedUser() &&
+          isValidId(txId) &&
+          isValidTransaction(incoming()) &&
+          incoming().ownerId == request.auth.uid &&
+          isBusinessOwner(businessId);
+        allow update: if isVerifiedUser() &&
+          isValidId(txId) &&
+          isValidTransaction(incoming()) &&
+          incoming().ownerId == existing().ownerId &&
+          incoming().createdAt == existing().createdAt &&
+          (
+            isAdmin() ||
+            (existing().ownerId == request.auth.uid && existing().etimsStatus != 'Transmitted' && incoming().diff(existing()).affectedKeys().hasOnly(['etimsStatus', 'syncedAt', 'emailedTo', 'etimsCuin']))
+          );
+        allow delete: if isAdmin() && isValidId(txId);
+      }
+
+      // ERP Module Records subcollection
+      match /erpRecords/{recordId} {
+        allow get: if isSignedIn() && isValidId(recordId) && (existing().ownerId == request.auth.uid || isAdmin());
+        allow list: if isSignedIn() && (resource.data.ownerId == request.auth.uid || isAdmin());
+        allow create: if isVerifiedUser() &&
+          isValidId(recordId) &&
+          isValidErpRecord(incoming()) &&
+          incoming().ownerId == request.auth.uid &&
+          isBusinessOwner(businessId);
+        allow update: if isVerifiedUser() &&
+          isValidId(recordId) &&
+          isValidErpRecord(incoming()) &&
+          incoming().ownerId == existing().ownerId &&
+          (isAdmin() || (existing().ownerId == request.auth.uid && incoming().diff(existing()).affectedKeys().hasOnly(['title', 'subtitle', 'status', 'amount', 'meta'])));
+        allow delete: if isVerifiedUser() && isValidId(recordId) && (existing().ownerId == request.auth.uid || isAdmin());
+      }
+    }
+  }
+}

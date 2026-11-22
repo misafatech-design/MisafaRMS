@@ -1,0 +1,6 @@
+{
+  "name": "MisafaRMS",
+  "description": "Enterprise Retail Management & ERP Platform with Odoo-style modular suite, Microsoft Dynamics RMS workflows, KRA eTIMS compliance, M-Pesa checkout, and offline-first multi-store sync.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
