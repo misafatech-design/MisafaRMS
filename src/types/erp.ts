@@ -145,9 +145,86 @@ export interface StoreBranch {
   isActive: boolean;
 }
 
+export type SubscriptionPlanId = 'Trial' | 'Starter' | 'Multi-Store Pro' | 'Enterprise';
+export type SubscriptionStatus = 'active' | 'trial' | 'past_due' | 'suspended';
+
+export interface SubscriptionPlanTier {
+  id: SubscriptionPlanId;
+  name: string;
+  tagline: string;
+  monthlyPriceKes: number;
+  monthlyPriceUsd: number;
+  branchLimit: number;
+  userLimit: number;
+  etimsIncluded: boolean;
+  highlighted?: boolean;
+}
+
+export interface PlatformBillingGateway {
+  id: string;
+  provider:
+    | 'mpesa_daraja_saas'
+    | 'airtel_money_saas'
+    | 'pesapal_saas'
+    | 'stripe_global'
+    | 'bank_eft'
+    | 'custom';
+  displayName: string;
+  enabled: boolean;
+  mode:
+    | 'Paybill'
+    | 'Merchant Till'
+    | 'Card & Mobile'
+    | 'International Card'
+    | 'Bank EFT / RTGS'
+    | 'Custom';
+  shortcodeOrAccount: string;
+  accountPrefix: string;
+  currencies: string[];
+  environment: 'Production' | 'Sandbox';
+  webhookUrl: string;
+  hasSecretConfigured: boolean;
+  settlementSchedule: string;
+  instructions?: string;
+}
+
+export interface PlatformUserRecord {
+  id: string;
+  name: string;
+  email: string;
+  tier: 'super_admin' | 'admin' | 'employee' | 'user';
+  role: UserRole | 'Super Admin' | 'Customer';
+  businessId?: string;
+  businessName?: string;
+  businessSlug?: string;
+  status: 'active' | 'suspended';
+  emailVerified: boolean;
+  lastActiveAt: string;
+  createdAt: string;
+}
+
+export interface SubscriptionInvoice {
+  id: string;
+  invoiceNo: string;
+  businessId: string;
+  businessName: string;
+  businessSlug: string;
+  planId: SubscriptionPlanId;
+  amount: number;
+  currency: string;
+  status: 'paid' | 'pending' | 'overdue';
+  paymentMethod: string;
+  paymentRef: string;
+  periodLabel: string;
+  dueDate: string;
+  paidAt?: string;
+}
+
 export interface BusinessEntity {
   id: string;
   ownerId?: string;
+  ownerName?: string;
+  ownerEmail?: string;
   slug: string;
   name: string;
   country: 'KE' | 'UG' | 'TZ' | 'GB' | 'US';
@@ -158,6 +235,11 @@ export interface BusinessEntity {
   etimsEnabled: boolean;
   etimsMode: 'OSCU' | 'VSCU' | 'Standard';
   paybillOrTill: string;
+  subscriptionPlan?: SubscriptionPlanId;
+  subscriptionStatus?: SubscriptionStatus;
+  monthlyFee?: number;
+  branchLimit?: number;
+  subscriptionRenewsAt?: string;
   installedModuleIds: string[];
   posConfig: PosCustomizationConfig;
   paymentGateways: PaymentGatewayConfig[];

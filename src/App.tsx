@@ -14,19 +14,24 @@ import { PaymentGatewaysView } from './components/PaymentGatewaysView';
 import { PosAdminConsole } from './components/PosAdminConsole';
 import { PosTerminal } from './components/PosTerminal';
 import { StudioView } from './components/StudioView';
+import { SuperAdminView } from './components/SuperAdminView';
 import { PrimaryWorkspaceTab, TopBar } from './components/TopBar';
 import { WorkspaceToolbar } from './components/WorkspaceToolbar';
 import { APP_MODULES } from './data/modulesRegistry';
 import {
+  DEFAULT_PLATFORM_BILLING_GATEWAYS,
+  DEFAULT_SUBSCRIPTION_PLANS,
   SEED_ATTENDANCE_LOGS,
   SEED_AUDIT_LOGS,
   SEED_AUTOMATIONS,
   SEED_BUSINESSES,
   SEED_EMPLOYEES,
   SEED_ERP_RECORDS,
+  SEED_PLATFORM_USERS,
   SEED_PRODUCTS,
   SEED_STORES,
   SEED_STUDIO_MODELS,
+  SEED_SUBSCRIPTION_INVOICES,
   SEED_TRANSACTIONS,
 } from './data/seedData';
 import {
@@ -57,6 +62,8 @@ import {
   ErpRecord,
   PaymentGatewayConfig,
   PaymentMethod,
+  PlatformBillingGateway,
+  PlatformUserRecord,
   PosCustomizationConfig,
   ProductItem,
   PromoOffer,
@@ -66,6 +73,10 @@ import {
   StoreBranch,
   StudioField,
   StudioModel,
+  SubscriptionInvoice,
+  SubscriptionPlanId,
+  SubscriptionPlanTier,
+  SubscriptionStatus,
   TaxCode,
   UserRole,
   WorkflowAutomation,
@@ -75,18 +86,36 @@ import { decryptOfflinePayload, encryptOfflinePayload } from './utils/cryptoSync
 const OFFLINE_QUEUE_STORAGE = 'misafarms_encrypted_offline_queue_v1';
 const POS_BINDING_STORAGE = 'misafarms_pos_binding_v1';
 
+const NON_BUSINESS_PATH_PREFIXES = new Set([
+  'pos',
+  'api',
+  'assets',
+  'super-admin',
+  'superadmin',
+  'admin',
+  'apps',
+  'etims',
+  'analytics',
+  'manifest.webmanifest',
+  'sw.js',
+]);
+
 function detectDedicatedPosEntry(): {
   isPosOnly: boolean;
+  isSuperAdminPath: boolean;
   bizSlug: string | null;
   storeId: string | null;
 } {
   if (typeof window === 'undefined') {
-    return { isPosOnly: false, bizSlug: null, storeId: null };
+    return { isPosOnly: false, isSuperAdminPath: false, bizSlug: null, storeId: null };
   }
   const params = new URLSearchParams(window.location.search);
-  const isPosPath =
-    window.location.pathname === '/pos' || window.location.pathname.startsWith('/pos/');
+  const pathname = window.location.pathname;
+  const firstSegment = pathname.replace(/^\/+|\/+$/g, '').split('/')[0]?.toLowerCase() || '';
+
+  const isPosPath = pathname === '/pos' || pathname.startsWith('/pos/');
   const isPosQuery = params.get('pos') === '1';
+  const isSuperAdminPath = firstSegment === 'super-admin' || firstSegment === 'superadmin';
   const isStandalone =
     window.matchMedia('(display-mode: standalone)').matches ||
     (window.navigator as unknown as { standalone?: boolean }).standalone === true;
@@ -95,7 +124,11 @@ function detectDedicatedPosEntry(): {
   let bizSlug = params.get('biz');
   let storeId = params.get('store');
 
-  if (bizSlug || storeId) {
+  if (!isPosOnly && firstSegment && !NON_BUSINESS_PATH_PREFIXES.has(firstSegment)) {
+    bizSlug = firstSegment;
+  }
+
+  if (isPosOnly && (bizSlug || storeId)) {
     try {
       window.localStorage.setItem(
         POS_BINDING_STORAGE,
@@ -104,7 +137,7 @@ function detectDedicatedPosEntry(): {
     } catch {
       // Ignore storage error
     }
-  } else if (isPosOnly) {
+  } else if (isPosOnly && !bizSlug && !storeId) {
     try {
       const saved = window.localStorage.getItem(POS_BINDING_STORAGE);
       if (saved) {
@@ -117,7 +150,7 @@ function detectDedicatedPosEntry(): {
     }
   }
 
-  return { isPosOnly, bizSlug, storeId };
+  return { isPosOnly, isSuperAdminPath, bizSlug, storeId };
 }
 
 interface QueuedOfflineCheckout {
@@ -175,7 +208,16 @@ function MisafaWorkspaceApp() {
     return SEED_STORES.find((s) => s.businessId === initialMatchedBiz.id) || SEED_STORES[0];
   }, [initialEntry.storeId, initialMatchedBiz.id]);
 
-  const [showLanding, setShowLanding] = useState(!initialPosShortcut);
+  const initialPathMatchesBiz = useMemo(() => {
+    if (!initialEntry.bizSlug || initialPosShortcut) return false;
+    return SEED_BUSINESSES.some(
+      (b) => b.slug.toLowerCase() === initialEntry.bizSlug!.toLowerCase()
+    );
+  }, [initialEntry.bizSlug, initialPosShortcut]);
+
+  const [showLanding, setShowLanding] = useState(
+    !initialPosShortcut && !initialEntry.isSuperAdminPath && !initialPathMatchesBiz
+  );
   const [posKioskMode, setPosKioskMode] = useState(initialPosShortcut);
   const [firebaseUser, setFirebaseUser] = useState<User | null>(null);
   const [authBanner, setAuthBanner] = useState('');
@@ -190,6 +232,16 @@ function MisafaWorkspaceApp() {
   const [auditLogs, setAuditLogs] = useState<AuditLogEntry[]>(SEED_AUDIT_LOGS);
   const [erpRecords, setErpRecords] = useState<ErpRecord[]>(SEED_ERP_RECORDS);
   const [attendanceLogs, setAttendanceLogs] = useState<ShiftAttendanceLog[]>(SEED_ATTENDANCE_LOGS);
+  const [platformUsers, setPlatformUsers] = useState<PlatformUserRecord[]>(SEED_PLATFORM_USERS);
+  const [subscriptionPlans, setSubscriptionPlans] = useState<SubscriptionPlanTier[]>(
+    DEFAULT_SUBSCRIPTION_PLANS
+  );
+  const [platformBillingGateways, setPlatformBillingGateways] = useState<
+    PlatformBillingGateway[]
+  >(DEFAULT_PLATFORM_BILLING_GATEWAYS);
+  const [subscriptionInvoices, setSubscriptionInvoices] = useState<SubscriptionInvoice[]>(
+    SEED_SUBSCRIPTION_INVOICES
+  );
 
   const [activeBusinessId, setActiveBusinessId] = useState<string>(initialMatchedBiz.id);
   const [activeStoreId, setActiveStoreId] = useState<string>(initialMatchedStore.id);
@@ -202,7 +254,9 @@ function MisafaWorkspaceApp() {
   const [activeEmployee, setActiveEmployee] = useState<EmployeeRecord | null>(SEED_EMPLOYEES[0]);
   const [sessionToken, setSessionToken] = useState<string | null>(null);
 
-  const [topTab, setTopTab] = useState<PrimaryWorkspaceTab>(initialPosShortcut ? 'pos' : 'apps');
+  const [topTab, setTopTab] = useState<PrimaryWorkspaceTab>(
+    initialPosShortcut ? 'pos' : initialEntry.isSuperAdminPath ? 'super_admin' : 'apps'
+  );
   const [selectedModule, setSelectedModule] = useState<AppModuleMeta | null>(null);
 
   const [isOffline, setIsOffline] = useState<boolean>(
@@ -289,6 +343,14 @@ function MisafaWorkspaceApp() {
           setAuditLogs(data.auditLogs);
           setErpRecords(data.erpRecords);
           if (Array.isArray(data.attendanceLogs)) setAttendanceLogs(data.attendanceLogs);
+          if (Array.isArray(data.platformUsers)) setPlatformUsers(data.platformUsers);
+          if (Array.isArray(data.subscriptionPlans)) setSubscriptionPlans(data.subscriptionPlans);
+          if (Array.isArray(data.platformBillingGateways)) {
+            setPlatformBillingGateways(data.platformBillingGateways);
+          }
+          if (Array.isArray(data.subscriptionInvoices)) {
+            setSubscriptionInvoices(data.subscriptionInvoices);
+          }
 
           if (initialEntry.bizSlug) {
             const matchedBiz = (data.businesses as BusinessEntity[]).find(
@@ -296,6 +358,7 @@ function MisafaWorkspaceApp() {
             );
             if (matchedBiz) {
               setActiveBusinessId(matchedBiz.id);
+              if (!initialPosShortcut) setShowLanding(false);
               const matchedStore = (data.stores as StoreBranch[]).find(
                 (s) =>
                   s.businessId === matchedBiz.id &&
@@ -322,7 +385,7 @@ function MisafaWorkspaceApp() {
     }
   }, []);
 
-  // Initialize in-memory bearer session on role switch
+  // Initialize in-memory bearer session on role/auth switch
   useEffect(() => {
     if (isOffline) return;
     fetch('/api/auth/session', {
@@ -331,6 +394,7 @@ function MisafaWorkspaceApp() {
       body: JSON.stringify({
         actor: activeEmployee?.name || 'Amina Hassan',
         role: activeRole,
+        email: firebaseUser?.email || '',
       }),
     })
       .then((r) => (r.ok ? r.json() : null))
@@ -338,7 +402,7 @@ function MisafaWorkspaceApp() {
         if (data?.token) setSessionToken(data.token);
       })
       .catch(() => {});
-  }, [activeRole, activeEmployee?.name, isOffline]);
+  }, [activeRole, activeEmployee?.name, firebaseUser?.email, isOffline]);
 
   // Listen to browser online/offline events
   useEffect(() => {
@@ -399,6 +463,10 @@ function MisafaWorkspaceApp() {
 
   const handleSelectBusiness = (bizId: string) => {
     setActiveBusinessId(bizId);
+    const biz = businesses.find((b) => b.id === bizId);
+    if (biz && !initialPosShortcut && typeof window !== 'undefined') {
+      window.history.replaceState(null, '', `/${biz.slug}`);
+    }
     const firstStore = stores.find((s) => s.businessId === bizId);
     if (firstStore) setActiveStoreId(firstStore.id);
     const firstEmp = employees.find((e) => e.businessId === bizId);
@@ -414,7 +482,10 @@ function MisafaWorkspaceApp() {
       }
     } else if (tier === 'employee') {
       if (activeRole === 'Owner') setActiveRole('Cashier');
-      if (selectedModule?.adminOnly) setSelectedModule(null);
+      if (selectedModule?.adminOnly || topTab === 'super_admin') {
+        setSelectedModule(null);
+        setTopTab('apps');
+      }
     } else {
       setActiveRole('Owner');
     }
@@ -1057,6 +1128,8 @@ function MisafaWorkspaceApp() {
 
   const handleCreateBusiness = async (payload: {
     name: string;
+    slug: string;
+    subscriptionPlan: SubscriptionPlanId;
     country: 'KE' | 'UG' | 'TZ' | 'GB' | 'US';
     currency: 'KES' | 'UGX' | 'TZS' | 'GBP' | 'USD';
     taxPin: string;
@@ -1074,8 +1147,10 @@ function MisafaWorkspaceApp() {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(payload),
     });
-    if (!res.ok) return;
     const data = await res.json();
+    if (!res.ok) {
+      throw new Error(data.error || 'Unable to provision business domain.');
+    }
     const createdBiz: BusinessEntity = {
       ...data.business,
       ownerId: firebaseUser?.uid,
@@ -1084,8 +1159,15 @@ function MisafaWorkspaceApp() {
     setStores((prev) => [...prev, data.store]);
     if (Array.isArray(data.employees)) setEmployees((prev) => [...prev, ...data.employees]);
     setProducts((prev) => [...data.products, ...prev]);
+    if (data.platformUser) setPlatformUsers((prev) => [data.platformUser, ...prev]);
+    if (data.subscriptionInvoice) {
+      setSubscriptionInvoices((prev) => [data.subscriptionInvoice, ...prev]);
+    }
     setActiveBusinessId(createdBiz.id);
     setActiveStoreId(data.store.id);
+    if (!initialPosShortcut && typeof window !== 'undefined') {
+      window.history.replaceState(null, '', `/${createdBiz.slug}`);
+    }
     setShowLanding(false);
     setTopTab('apps');
     setSelectedModule(null);
@@ -1109,6 +1191,7 @@ function MisafaWorkspaceApp() {
     if (res.ok) {
       const data = await res.json();
       setEmployees((prev) => [...prev, data.employee]);
+      if (data.platformUser) setPlatformUsers((prev) => [data.platformUser, ...prev]);
     }
   };
 
@@ -1133,6 +1216,137 @@ function MisafaWorkspaceApp() {
       setNewBranchLocation('');
       setNewBranchTill('');
       setAddStoreOpen(false);
+    }
+  };
+
+  // Super Admin SaaS Control Plane Handlers
+  const ensureSuperAdminHeaders = () => ({
+    'Content-Type': 'application/json',
+    ...(sessionToken ? { Authorization: `Bearer ${sessionToken}` } : {}),
+  });
+
+  const handleSuperAdminUpdateBusiness = async (
+    businessId: string,
+    patch: {
+      subscriptionPlan?: SubscriptionPlanId;
+      subscriptionStatus?: SubscriptionStatus;
+      branchLimit?: number;
+      monthlyFee?: number;
+      subscriptionRenewsAt?: string;
+    }
+  ) => {
+    const res = await fetch(`/api/super-admin/businesses/${businessId}`, {
+      method: 'PATCH',
+      headers: ensureSuperAdminHeaders(),
+      body: JSON.stringify(patch),
+    });
+    if (res.ok) {
+      const data = await res.json();
+      setBusinesses((prev) => prev.map((b) => (b.id === businessId ? data.business : b)));
+    }
+  };
+
+  const handleSuperAdminAddBranch = async (payload: {
+    businessId: string;
+    name: string;
+    location: string;
+    tillNumber: string;
+  }) => {
+    const res = await fetch('/api/stores', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+    if (res.ok) {
+      const data = await res.json();
+      setStores((prev) => [...prev, data.store]);
+    }
+  };
+
+  const handleSuperAdminCreateUser = async (payload: {
+    name: string;
+    email: string;
+    tier: PlatformUserRecord['tier'];
+    role: PlatformUserRecord['role'];
+    businessId?: string;
+  }) => {
+    const res = await fetch('/api/super-admin/users', {
+      method: 'POST',
+      headers: ensureSuperAdminHeaders(),
+      body: JSON.stringify(payload),
+    });
+    if (res.ok) {
+      const data = await res.json();
+      setPlatformUsers((prev) => [data.user, ...prev]);
+    }
+  };
+
+  const handleSuperAdminUpdateUser = async (
+    userId: string,
+    patch: {
+      status?: 'active' | 'suspended';
+      tier?: PlatformUserRecord['tier'];
+      role?: PlatformUserRecord['role'];
+      businessId?: string;
+    }
+  ) => {
+    const res = await fetch(`/api/super-admin/users/${userId}`, {
+      method: 'PATCH',
+      headers: ensureSuperAdminHeaders(),
+      body: JSON.stringify(patch),
+    });
+    if (res.ok) {
+      const data = await res.json();
+      setPlatformUsers((prev) => prev.map((u) => (u.id === userId ? data.user : u)));
+    }
+  };
+
+  const handleSuperAdminUpdatePlans = async (plans: SubscriptionPlanTier[]) => {
+    const res = await fetch('/api/super-admin/plans', {
+      method: 'PATCH',
+      headers: ensureSuperAdminHeaders(),
+      body: JSON.stringify({ plans }),
+    });
+    if (res.ok) {
+      const data = await res.json();
+      setSubscriptionPlans(data.subscriptionPlans);
+    }
+  };
+
+  const handleSuperAdminSaveBillingGateways = async (
+    gateways: PlatformBillingGateway[],
+    secretUpdates: Record<string, { consumerKey?: string }>
+  ) => {
+    const res = await fetch('/api/super-admin/billing-gateways', {
+      method: 'PUT',
+      headers: ensureSuperAdminHeaders(),
+      body: JSON.stringify({ gateways, secretUpdates }),
+    });
+    if (res.ok) {
+      const data = await res.json();
+      setPlatformBillingGateways(data.platformBillingGateways);
+    }
+  };
+
+  const handlePaySubscription = async (payload: {
+    businessId: string;
+    planId: SubscriptionPlanId;
+    gatewayId: string;
+    payerRef: string;
+  }) => {
+    const res = await fetch('/api/subscriptions/pay', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+    if (res.ok) {
+      const data = await res.json();
+      setBusinesses((prev) =>
+        prev.map((b) => (b.id === payload.businessId ? data.business : b))
+      );
+      if (Array.isArray(data.subscriptionInvoices)) {
+        setSubscriptionInvoices(data.subscriptionInvoices);
+      }
     }
   };
 
@@ -1338,6 +1552,14 @@ function MisafaWorkspaceApp() {
             setSelectedModule(null);
             setShowLanding(false);
           }}
+          onOpenSuperAdmin={() => {
+            setAccountTier('admin');
+            setActiveRole('Owner');
+            setPosKioskMode(false);
+            setSelectedModule(null);
+            setTopTab('super_admin');
+            setShowLanding(false);
+          }}
           firebaseUserEmail={firebaseUser?.email}
           onContinueSignedIn={() => {
             setPosKioskMode(false);
@@ -1347,6 +1569,8 @@ function MisafaWorkspaceApp() {
         <OnboardingWizardModal
           isOpen={wizardOpen}
           onClose={() => setWizardOpen(false)}
+          existingBusinesses={businesses}
+          subscriptionPlans={subscriptionPlans}
           onCreateBusiness={handleCreateBusiness}
         />
       </>
@@ -1394,7 +1618,9 @@ function MisafaWorkspaceApp() {
         ? 'KRA eTIMS & Tax'
         : topTab === 'analytics'
           ? 'Dynamics BI & Analytics'
-          : 'Enterprise Launcher';
+          : topTab === 'super_admin'
+            ? 'Super Admin Control Plane'
+            : 'Enterprise Launcher';
 
   return (
     <div className="min-h-screen bg-slate-50 text-slate-900 dark:bg-slate-950 dark:text-slate-100">
@@ -1403,6 +1629,7 @@ function MisafaWorkspaceApp() {
         onSelectTab={handleSelectTopTab}
         onOpenWizard={() => setWizardOpen(true)}
         onGoLanding={() => setShowLanding(true)}
+        showSuperAdmin={accountTier === 'admin'}
       />
 
       <WorkspaceToolbar
@@ -1446,6 +1673,7 @@ function MisafaWorkspaceApp() {
             { id: 'pos', label: 'POS' },
             { id: 'etims', label: 'eTIMS' },
             { id: 'analytics', label: 'Analytics' },
+            ...(accountTier === 'admin' ? ([{ id: 'super_admin', label: 'Super Admin' }] as const) : []),
           ] as const
         )
           .filter((t) => accountTier !== 'user' || t.id === 'apps')
@@ -1566,6 +1794,31 @@ function MisafaWorkspaceApp() {
             products={businessProducts}
             transactions={businessTransactions}
           />
+        ) : topTab === 'super_admin' && accountTier === 'admin' ? (
+          <SuperAdminView
+            businesses={businesses}
+            stores={stores}
+            employees={employees}
+            products={products}
+            platformUsers={platformUsers}
+            subscriptionPlans={subscriptionPlans}
+            platformBillingGateways={platformBillingGateways}
+            subscriptionInvoices={subscriptionInvoices}
+            currentUserEmail={firebaseUser?.email}
+            onSwitchToBusiness={(bizId) => {
+              handleSelectBusiness(bizId);
+              setSelectedModule(null);
+              setTopTab('apps');
+            }}
+            onUpdateBusinessSubscription={handleSuperAdminUpdateBusiness}
+            onAddBranchToBusiness={handleSuperAdminAddBranch}
+            onCreatePlatformUser={handleSuperAdminCreateUser}
+            onUpdatePlatformUser={handleSuperAdminUpdateUser}
+            onUpdatePlans={handleSuperAdminUpdatePlans}
+            onSaveBillingGateways={handleSuperAdminSaveBillingGateways}
+            onPaySubscription={handlePaySubscription}
+            onOpenNewBusinessWizard={() => setWizardOpen(true)}
+          />
         ) : (
           <AppLauncher
             activeBusiness={activeBusiness}
@@ -1584,7 +1837,7 @@ function MisafaWorkspaceApp() {
       <footer className="mt-12 border-t border-slate-200 bg-white py-5 dark:border-slate-800 dark:bg-slate-950">
         <div className="mx-auto flex max-w-[1440px] flex-wrap items-center justify-between gap-4 px-4 text-xs text-slate-500 sm:px-6 dark:text-slate-400">
           <span>
-            MisafaRMS · https://{activeBusiness.slug}.misafarms.com/
+            MisafaRMS · https://misafarms.com/{activeBusiness.slug}
           </span>
           {accountTier === 'admin' && (
             <div className="flex flex-wrap items-center gap-4">
@@ -1626,6 +1879,8 @@ function MisafaWorkspaceApp() {
       <OnboardingWizardModal
         isOpen={wizardOpen}
         onClose={() => setWizardOpen(false)}
+        existingBusinesses={businesses}
+        subscriptionPlans={subscriptionPlans}
         onCreateBusiness={handleCreateBusiness}
       />
 

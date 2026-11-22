@@ -68,13 +68,16 @@ service cloud.firestore {
     function isValidBusiness(data) {
       return data.keys().hasAll(['id', 'ownerId', 'slug', 'name', 'country', 'currency', 'taxPin', 'createdAt']) &&
         data.keys().hasOnly([
-          'id', 'ownerId', 'slug', 'name', 'country', 'currency', 'taxAuthority',
+          'id', 'ownerId', 'ownerName', 'ownerEmail', 'slug', 'name', 'country', 'currency', 'taxAuthority',
           'taxPin', 'vatRate', 'etimsEnabled', 'etimsMode', 'paybillOrTill',
+          'subscriptionPlan', 'subscriptionStatus', 'monthlyFee', 'branchLimit', 'subscriptionRenewsAt',
           'installedModuleIds', 'posConfig', 'paymentGateways', 'layoutConfig',
           'catalogTaxonomy', 'offers', 'createdAt', 'updatedAt'
         ]) &&
         isValidId(data.id) &&
         isValidId(data.ownerId) &&
+        (!('ownerName' in data) || (data.ownerName is string && data.ownerName.size() <= 100)) &&
+        (!('ownerEmail' in data) || (data.ownerEmail is string && data.ownerEmail.size() <= 160)) &&
         data.slug is string && data.slug.size() >= 2 && data.slug.size() <= 64 && data.slug.matches('^[a-z0-9\\-]+$') &&
         data.name is string && data.name.size() >= 1 && data.name.size() <= 120 &&
         data.country in ['KE', 'UG', 'TZ', 'GB', 'US'] &&
@@ -85,6 +88,11 @@ service cloud.firestore {
         (!('etimsMode' in data) || data.etimsMode in ['OSCU', 'VSCU', 'Standard']) &&
         (!('taxAuthority' in data) || (data.taxAuthority is string && data.taxAuthority.size() <= 100)) &&
         (!('paybillOrTill' in data) || (data.paybillOrTill is string && data.paybillOrTill.size() <= 120)) &&
+        (!('subscriptionPlan' in data) || data.subscriptionPlan in ['Trial', 'Starter', 'Multi-Store Pro', 'Enterprise']) &&
+        (!('subscriptionStatus' in data) || data.subscriptionStatus in ['active', 'trial', 'past_due', 'suspended']) &&
+        (!('monthlyFee' in data) || (data.monthlyFee is number && data.monthlyFee >= 0)) &&
+        (!('branchLimit' in data) || (data.branchLimit is number && data.branchLimit >= 1)) &&
+        (!('subscriptionRenewsAt' in data) || (data.subscriptionRenewsAt is string && data.subscriptionRenewsAt.size() <= 40)) &&
         (!('installedModuleIds' in data) || (data.installedModuleIds is list && data.installedModuleIds.size() <= 80 && (data.installedModuleIds.size() == 0 || data.installedModuleIds[0] is string))) &&
         (!('posConfig' in data) || data.posConfig is map) &&
         (!('paymentGateways' in data) || data.paymentGateways is list) &&
@@ -93,6 +101,71 @@ service cloud.firestore {
         (!('offers' in data) || (data.offers is list && data.offers.size() <= 100)) &&
         data.createdAt is string && data.createdAt.size() <= 40 &&
         (!('updatedAt' in data) || (data.updatedAt is string && data.updatedAt.size() <= 40));
+    }
+
+    function isValidPlatformUser(data) {
+      return data.keys().hasAll(['id', 'name', 'email', 'tier', 'status', 'createdAt']) &&
+        data.keys().hasOnly([
+          'id', 'name', 'email', 'tier', 'role', 'businessId', 'businessName',
+          'businessSlug', 'status', 'emailVerified', 'lastActiveAt', 'createdAt'
+        ]) &&
+        isValidId(data.id) &&
+        data.name is string && data.name.size() >= 1 && data.name.size() <= 100 &&
+        data.email is string && data.email.size() >= 3 && data.email.size() <= 160 &&
+        data.tier in ['super_admin', 'admin', 'employee', 'user'] &&
+        data.status in ['active', 'suspended'] &&
+        (!('role' in data) || (data.role is string && data.role.size() <= 60)) &&
+        (!('businessId' in data) || (data.businessId is string && data.businessId.size() <= 128)) &&
+        (!('businessName' in data) || (data.businessName is string && data.businessName.size() <= 120)) &&
+        (!('businessSlug' in data) || (data.businessSlug is string && data.businessSlug.size() <= 64)) &&
+        (!('emailVerified' in data) || data.emailVerified is bool) &&
+        (!('lastActiveAt' in data) || (data.lastActiveAt is string && data.lastActiveAt.size() <= 40)) &&
+        data.createdAt is string && data.createdAt.size() <= 40;
+    }
+
+    function isValidPlatformBillingGateway(data) {
+      return data.keys().hasAll(['id', 'provider', 'displayName', 'enabled', 'mode']) &&
+        data.keys().hasOnly([
+          'id', 'provider', 'displayName', 'enabled', 'mode', 'shortcodeOrAccount',
+          'accountPrefix', 'currencies', 'environment', 'webhookUrl', 'hasSecretConfigured',
+          'settlementSchedule', 'instructions'
+        ]) &&
+        isValidId(data.id) &&
+        data.provider is string && data.provider.size() >= 1 && data.provider.size() <= 60 &&
+        data.displayName is string && data.displayName.size() >= 1 && data.displayName.size() <= 120 &&
+        data.enabled is bool &&
+        data.mode is string && data.mode.size() >= 1 && data.mode.size() <= 60 &&
+        (!('shortcodeOrAccount' in data) || (data.shortcodeOrAccount is string && data.shortcodeOrAccount.size() <= 80)) &&
+        (!('accountPrefix' in data) || (data.accountPrefix is string && data.accountPrefix.size() <= 40)) &&
+        (!('currencies' in data) || (data.currencies is list && data.currencies.size() <= 20)) &&
+        (!('environment' in data) || data.environment in ['Production', 'Sandbox']) &&
+        (!('webhookUrl' in data) || (data.webhookUrl is string && data.webhookUrl.size() <= 240)) &&
+        (!('hasSecretConfigured' in data) || data.hasSecretConfigured is bool) &&
+        (!('settlementSchedule' in data) || (data.settlementSchedule is string && data.settlementSchedule.size() <= 100)) &&
+        (!('instructions' in data) || (data.instructions is string && data.instructions.size() <= 300));
+    }
+
+    function isValidSubscriptionInvoice(data) {
+      return data.keys().hasAll(['id', 'invoiceNo', 'businessId', 'planId', 'amount', 'status', 'dueDate']) &&
+        data.keys().hasOnly([
+          'id', 'invoiceNo', 'businessId', 'businessName', 'businessSlug',
+          'planId', 'amount', 'currency', 'status', 'paymentMethod', 'paymentRef',
+          'periodLabel', 'dueDate', 'paidAt'
+        ]) &&
+        isValidId(data.id) &&
+        data.invoiceNo is string && data.invoiceNo.size() >= 1 && data.invoiceNo.size() <= 60 &&
+        data.businessId is string && data.businessId.size() >= 1 && data.businessId.size() <= 128 &&
+        data.planId in ['Trial', 'Starter', 'Multi-Store Pro', 'Enterprise'] &&
+        data.amount is number && data.amount >= 0 &&
+        data.status in ['paid', 'pending', 'overdue'] &&
+        data.dueDate is string && data.dueDate.size() <= 40 &&
+        (!('businessName' in data) || (data.businessName is string && data.businessName.size() <= 120)) &&
+        (!('businessSlug' in data) || (data.businessSlug is string && data.businessSlug.size() <= 64)) &&
+        (!('currency' in data) || (data.currency is string && data.currency.size() <= 10)) &&
+        (!('paymentMethod' in data) || (data.paymentMethod is string && data.paymentMethod.size() <= 120)) &&
+        (!('paymentRef' in data) || (data.paymentRef is string && data.paymentRef.size() <= 80)) &&
+        (!('periodLabel' in data) || (data.periodLabel is string && data.periodLabel.size() <= 60)) &&
+        (!('paidAt' in data) || (data.paidAt is string && data.paidAt.size() <= 40));
     }
 
     function isValidEmployee(data) {
@@ -197,6 +270,27 @@ service cloud.firestore {
     match /admins/{userId} {
       allow get: if isOwnerUid(userId) || isAdmin();
       allow create, update, delete: if isAdmin() && isValidId(userId);
+    }
+
+    // Super Admin Software Users Directory (PII isolated to Super Admin only)
+    match /platformUsers/{userId} {
+      allow get, list: if isAdmin();
+      allow create, update: if isAdmin() && isValidId(userId) && isValidPlatformUser(incoming());
+      allow delete: if isAdmin() && isValidId(userId);
+    }
+
+    // Super Admin SaaS Subscription Payment Gateways (read by signed-in business owners for checkout, write only by Super Admin)
+    match /platformBillingGateways/{gatewayId} {
+      allow get, list: if isSignedIn();
+      allow create, update: if isAdmin() && isValidId(gatewayId) && isValidPlatformBillingGateway(incoming());
+      allow delete: if isAdmin() && isValidId(gatewayId);
+    }
+
+    // SaaS Subscription Invoices
+    match /subscriptionInvoices/{invoiceId} {
+      allow get, list: if isAdmin();
+      allow create, update: if isAdmin() && isValidId(invoiceId) && isValidSubscriptionInvoice(incoming());
+      allow delete: if isAdmin() && isValidId(invoiceId);
     }
 
     // User accounts & isolated private PII

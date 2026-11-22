@@ -1,12 +1,13 @@
 import React from 'react';
 
-export type PrimaryWorkspaceTab = 'apps' | 'pos' | 'etims' | 'analytics';
+export type PrimaryWorkspaceTab = 'apps' | 'pos' | 'etims' | 'analytics' | 'super_admin';
 
 interface TopBarProps {
   activeTab: PrimaryWorkspaceTab;
   onSelectTab: (tab: PrimaryWorkspaceTab) => void;
   onOpenWizard: () => void;
   onGoLanding: () => void;
+  showSuperAdmin?: boolean;
 }
 
 export const TopBar: React.FC<TopBarProps> = ({
@@ -14,12 +15,14 @@ export const TopBar: React.FC<TopBarProps> = ({
   onSelectTab,
   onOpenWizard,
   onGoLanding,
+  showSuperAdmin = true,
 }) => {
   const navItems: Array<{ id: PrimaryWorkspaceTab; label: string }> = [
     { id: 'apps', label: 'Apps' },
     { id: 'pos', label: 'Point of Sale' },
     { id: 'etims', label: 'eTIMS & Tax' },
     { id: 'analytics', label: 'Analytics' },
+    ...(showSuperAdmin ? ([{ id: 'super_admin', label: 'Super Admin' }] as const) : []),
   ];
 
   return (

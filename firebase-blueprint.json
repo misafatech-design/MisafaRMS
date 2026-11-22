@@ -45,10 +45,65 @@
         "layoutConfig": { "type": "object" },
         "catalogTaxonomy": { "type": "array" },
         "offers": { "type": "array" },
+        "ownerName": { "type": "string", "maxLength": 100 },
+        "ownerEmail": { "type": "string", "maxLength": 160 },
+        "subscriptionPlan": { "type": "string", "enum": ["Trial", "Starter", "Multi-Store Pro", "Enterprise"] },
+        "subscriptionStatus": { "type": "string", "enum": ["active", "trial", "past_due", "suspended"] },
+        "monthlyFee": { "type": "number" },
+        "branchLimit": { "type": "number" },
+        "subscriptionRenewsAt": { "type": "string", "maxLength": 40 },
         "createdAt": { "type": "string", "format": "date-time" },
         "updatedAt": { "type": "string", "format": "date-time" }
       },
       "required": ["id", "ownerId", "slug", "name", "country", "currency", "taxPin", "createdAt"]
+    },
+    "PlatformUserRecord": {
+      "title": "PlatformUserRecord",
+      "description": "Super Admin directory record of SaaS software users across businesses",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "name": { "type": "string", "minLength": 1, "maxLength": 100 },
+        "email": { "type": "string", "minLength": 3, "maxLength": 160 },
+        "tier": { "type": "string", "enum": ["super_admin", "admin", "employee", "user"] },
+        "role": { "type": "string", "maxLength": 60 },
+        "businessId": { "type": "string", "maxLength": 128 },
+        "businessSlug": { "type": "string", "maxLength": 64 },
+        "status": { "type": "string", "enum": ["active", "suspended"] },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["id", "name", "email", "tier", "status", "createdAt"]
+    },
+    "PlatformBillingGateway": {
+      "title": "PlatformBillingGateway",
+      "description": "Super Admin payment collection configuration for SaaS subscriptions",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "provider": { "type": "string", "maxLength": 60 },
+        "displayName": { "type": "string", "minLength": 1, "maxLength": 120 },
+        "enabled": { "type": "boolean" },
+        "mode": { "type": "string", "maxLength": 60 },
+        "shortcodeOrAccount": { "type": "string", "maxLength": 80 },
+        "environment": { "type": "string", "enum": ["Production", "Sandbox"] }
+      },
+      "required": ["id", "provider", "displayName", "enabled", "mode"]
+    },
+    "SubscriptionInvoice": {
+      "title": "SubscriptionInvoice",
+      "description": "SaaS subscription billing invoice paid by tenant business to MisafaRMS",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "invoiceNo": { "type": "string", "minLength": 1, "maxLength": 60 },
+        "businessId": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "planId": { "type": "string", "enum": ["Trial", "Starter", "Multi-Store Pro", "Enterprise"] },
+        "amount": { "type": "number" },
+        "currency": { "type": "string", "maxLength": 10 },
+        "status": { "type": "string", "enum": ["paid", "pending", "overdue"] },
+        "dueDate": { "type": "string", "maxLength": 40 }
+      },
+      "required": ["id", "invoiceNo", "businessId", "planId", "amount", "status", "dueDate"]
     },
     "EmployeeRecord": {
       "title": "EmployeeRecord",
@@ -126,6 +181,18 @@
     "/admins/{userId}": {
       "schema": { "$ref": "#/entities/UserAccount" },
       "description": "Trusted administrator lookup documents"
+    },
+    "/platformUsers/{userId}": {
+      "schema": { "$ref": "#/entities/PlatformUserRecord" },
+      "description": "Super Admin software users directory"
+    },
+    "/platformBillingGateways/{gatewayId}": {
+      "schema": { "$ref": "#/entities/PlatformBillingGateway" },
+      "description": "Super Admin SaaS subscription collection gateways"
+    },
+    "/subscriptionInvoices/{invoiceId}": {
+      "schema": { "$ref": "#/entities/SubscriptionInvoice" },
+      "description": "Tenant SaaS subscription invoices"
     },
     "/users/{userId}": {
       "schema": { "$ref": "#/entities/UserAccount" },

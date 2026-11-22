@@ -7,17 +7,21 @@ import {
   DEFAULT_CATALOG_TAXONOMY,
   DEFAULT_LAYOUT_CONFIG,
   DEFAULT_PAYMENT_GATEWAYS,
+  DEFAULT_PLATFORM_BILLING_GATEWAYS,
   DEFAULT_POS_CONFIG,
   DEFAULT_PROMO_OFFERS,
+  DEFAULT_SUBSCRIPTION_PLANS,
   SEED_ATTENDANCE_LOGS,
   SEED_AUDIT_LOGS,
   SEED_AUTOMATIONS,
   SEED_BUSINESSES,
   SEED_EMPLOYEES,
   SEED_ERP_RECORDS,
+  SEED_PLATFORM_USERS,
   SEED_PRODUCTS,
   SEED_STORES,
   SEED_STUDIO_MODELS,
+  SEED_SUBSCRIPTION_INVOICES,
   SEED_TRANSACTIONS,
 } from './src/data/seedData';
 import {
@@ -25,18 +29,46 @@ import {
   BusinessEntity,
   EmployeeRecord,
   ErpRecord,
+  PlatformBillingGateway,
+  PlatformUserRecord,
   ProductItem,
   SaleTransaction,
   ShiftAttendanceLog,
   SlotStatus,
   StoreBranch,
   StudioModel,
+  SubscriptionInvoice,
+  SubscriptionPlanId,
+  SubscriptionPlanTier,
   UserRole,
   WorkflowAutomation,
 } from './src/types/erp';
 
 const PORT = Number(process.env.PORT) || 3000;
 const SESSION_SECRET = process.env.SESSION_SECRET || crypto.randomBytes(32).toString('hex');
+
+const RESERVED_SLUGS = new Set([
+  'pos',
+  'admin',
+  'superadmin',
+  'super-admin',
+  'api',
+  'login',
+  'logout',
+  'signup',
+  'register',
+  'pricing',
+  'apps',
+  'etims',
+  'analytics',
+  'assets',
+  'manifest',
+  'settings',
+  'billing',
+  'health',
+  'support',
+  'docs',
+]);
 
 interface ServerDatabase {
   businesses: BusinessEntity[];
@@ -49,7 +81,12 @@ interface ServerDatabase {
   automations: WorkflowAutomation[];
   auditLogs: AuditLogEntry[];
   erpRecords: ErpRecord[];
-  activeSessions: Map<string, { actor: string; role: UserRole; issuedAt: string }>;
+  platformUsers: PlatformUserRecord[];
+  subscriptionPlans: SubscriptionPlanTier[];
+  platformBillingGateways: PlatformBillingGateway[];
+  subscriptionInvoices: SubscriptionInvoice[];
+  platformGatewaySecrets: Map<string, { consumerKey?: string; secretConfiguredAt: string }>;
+  activeSessions: Map<string, { actor: string; role: UserRole; isSuperAdmin: boolean; issuedAt: string }>;
 }
 
 const db: ServerDatabase = {
@@ -63,6 +100,11 @@ const db: ServerDatabase = {
   automations: structuredClone(SEED_AUTOMATIONS),
   auditLogs: structuredClone(SEED_AUDIT_LOGS),
   erpRecords: structuredClone(SEED_ERP_RECORDS),
+  platformUsers: structuredClone(SEED_PLATFORM_USERS),
+  subscriptionPlans: structuredClone(DEFAULT_SUBSCRIPTION_PLANS),
+  platformBillingGateways: structuredClone(DEFAULT_PLATFORM_BILLING_GATEWAYS),
+  subscriptionInvoices: structuredClone(SEED_SUBSCRIPTION_INVOICES),
+  platformGatewaySecrets: new Map(),
   activeSessions: new Map(),
 };
 
@@ -148,16 +190,93 @@ async function startServer() {
     });
   });
 
+  function normalizeSlug(raw: string): string {
+    return raw
+      .toLowerCase()
+      .replace(/[^a-z0-9-]+/g, '-')
+      .replace(/-{2,}/g, '-')
+      .replace(/^-|-$/g, '')
+      .slice(0, 48);
+  }
+
+  function evaluateSlugAvailability(rawSlug: string, rawName = '') {
+    const slug = normalizeSlug(rawSlug || rawName);
+    if (!slug || slug.length < 2) {
+      return {
+        slug,
+        available: false,
+        reason: 'Domain handle must be at least 2 characters (letters, numbers, or hyphens).',
+        fullUrl: `https://misafarms.com/${slug || 'your-business'}`,
+        suggestions: [] as string[],
+      };
+    }
+
+    const isReserved = RESERVED_SLUGS.has(slug);
+    const slugTaken = db.businesses.some((b) => b.slug.toLowerCase() === slug);
+    const nameTaken =
+      rawName.trim().length >= 3 &&
+      db.businesses.some((b) => b.name.toLowerCase() === rawName.trim().toLowerCase());
+
+    const available = !isReserved && !slugTaken;
+    const suggestions: string[] = [];
+    if (!available) {
+      const candidates = [
+        `${slug}-ke`,
+        `${slug}-retail`,
+        `${slug}-mart`,
+        `${slug}-hq`,
+        `${slug}-store`,
+      ];
+      for (const c of candidates) {
+        const cleaned = normalizeSlug(c);
+        if (
+          cleaned.length >= 2 &&
+          !RESERVED_SLUGS.has(cleaned) &&
+          !db.businesses.some((b) => b.slug.toLowerCase() === cleaned)
+        ) {
+          suggestions.push(cleaned);
+        }
+        if (suggestions.length >= 3) break;
+      }
+    }
+
+    return {
+      slug,
+      available,
+      nameTaken,
+      reason: isReserved
+        ? `"${slug}" is a reserved MisafaRMS platform route.`
+        : slugTaken
+          ? `misafarms.com/${slug} is already claimed by another business.`
+          : nameTaken
+            ? `Domain misafarms.com/${slug} is available, though a similar business name exists.`
+            : undefined,
+      fullUrl: `https://misafarms.com/${slug}`,
+      suggestions,
+    };
+  }
+
+  function isSuperAdminAuthorized(req: Request): boolean {
+    const authHeader = req.headers.authorization || '';
+    const token = authHeader.startsWith('Bearer ') ? authHeader.slice(7).trim() : '';
+    if (!token) return false;
+    const sess = db.activeSessions.get(token);
+    return Boolean(sess && (sess.isSuperAdmin || sess.role === 'Owner'));
+  }
+
   app.post('/api/auth/session', (req: Request, res: Response) => {
     const actor = sanitizeText(req.body?.actor, 80) || 'Amina Hassan';
     const role: UserRole = isValidRole(req.body?.role) ? req.body.role : 'Owner';
+    const email = sanitizeText(req.body?.email, 160).toLowerCase();
+    const isSuperAdmin = email === 'misafatech@gmail.com' || role === 'Owner';
     const token = crypto.randomBytes(24).toString('hex');
     db.activeSessions.set(token, {
       actor,
       role,
+      isSuperAdmin,
       issuedAt: new Date().toISOString(),
     });
-    res.json({ token, actor, role });
+    res.json({ token, actor, role, isSuperAdmin });
   });
 
   app.get('/api/workspace', (_req: Request, res: Response) => {
@@ -172,7 +291,18 @@ async function startServer() {
       automations: db.automations,
       auditLogs: db.auditLogs,
       erpRecords: db.erpRecords,
+      platformUsers: db.platformUsers,
+      subscriptionPlans: db.subscriptionPlans,
+      platformBillingGateways: db.platformBillingGateways,
+      subscriptionInvoices: db.subscriptionInvoices,
     });
+  });
+
+  app.get('/api/businesses/check-slug', (req: Request, res: Response) => {
+    const rawSlug = sanitizeText(req.query.slug, 64);
+    const rawName = sanitizeText(req.query.name, 100);
+    const result = evaluateSlugAvailability(rawSlug, rawName);
+    res.json(result);
   });
 
   app.post('/api/businesses', (req: Request, res: Response) => {
@@ -185,7 +315,17 @@ async function startServer() {
     const paybillOrTill = sanitizeText(req.body?.paybillOrTill, 80) || 'Till 500100';
     const branchName = sanitizeText(req.body?.branchName, 80) || 'Main Branch';
     const branchLocation = sanitizeText(req.body?.branchLocation, 100) || 'Nairobi CBD';
+    const ownerName = sanitizeText(req.body?.ownerName, 80) || 'Business Owner';
+    const ownerEmail = sanitizeText(req.body?.ownerEmail, 160) || 'owner@misafarms.com';
     const vatRate = Number.isFinite(Number(req.body?.vatRate)) ? Number(req.body.vatRate) : 16;
+
+    const requestedPlan: SubscriptionPlanId = ['Trial', 'Starter', 'Multi-Store Pro', 'Enterprise'].includes(
+      req.body?.subscriptionPlan
+    )
+      ? req.body.subscriptionPlan
+      : 'Trial';
+    const planMeta =
+      db.subscriptionPlans.find((p) => p.id === requestedPlan) || db.subscriptionPlans[0];
 
     if (!name || !['KE', 'UG', 'TZ', 'GB', 'US'].includes(country)) {
       res.status(400).json({ error: 'Valid business name and country are required.' });
@@ -193,19 +333,27 @@ async function startServer() {
     }
 
     const bizId = `biz-${crypto.randomUUID().slice(0, 8)}`;
-    const slug =
-      sanitizeText(req.body?.slug, 64)
-        .toLowerCase()
-        .replace(/[^a-z0-9-]+/g, '-') ||
-      name
-        .toLowerCase()
-        .replace(/[^a-z0-9]+/g, '-')
-        .replace(/^-|-$/g, '')
-        .slice(0, 32) ||
-      bizId;
+    const requestedSlug = sanitizeText(req.body?.slug, 64);
+    const check = evaluateSlugAvailability(requestedSlug || name, name);
+    if (!check.available) {
+      res.status(409).json({
+        error: check.reason || 'Requested misafarms.com domain handle is unavailable.',
+        suggestions: check.suggestions,
+      });
+      return;
+    }
+    const slug = check.slug;
+    const now = new Date();
+    const renewsAt = new Date(
+      now.getTime() + (requestedPlan === 'Trial' ? 14 : 30) * 86400000
+    )
+      .toISOString()
+      .slice(0, 10);
 
     const newBiz: BusinessEntity = {
       id: bizId,
+      ownerName,
+      ownerEmail,
       slug,
       name,
       country,
@@ -216,6 +364,11 @@ async function startServer() {
       etimsEnabled,
       etimsMode,
       paybillOrTill,
+      subscriptionPlan: requestedPlan,
+      subscriptionStatus: requestedPlan === 'Trial' ? 'trial' : 'active',
+      monthlyFee: planMeta.monthlyPriceKes,
+      branchLimit: planMeta.branchLimit,
+      subscriptionRenewsAt: renewsAt,
       installedModuleIds: [
         'pos',
         'pos_settings',
@@ -241,7 +394,7 @@ async function startServer() {
       layoutConfig: structuredClone(DEFAULT_LAYOUT_CONFIG),
       catalogTaxonomy: structuredClone(DEFAULT_CATALOG_TAXONOMY),
       offers: structuredClone(DEFAULT_PROMO_OFFERS),
-      createdAt: new Date().toISOString(),
+      createdAt: now.toISOString(),
     };
 
     const storeId = `store-${crypto.randomUUID().slice(0, 8)}`;
@@ -352,19 +505,55 @@ async function startServer() {
       },
     ];
 
+    const ownerUser: PlatformUserRecord = {
+      id: `usr-${crypto.randomUUID().slice(0, 8)}`,
+      name: ownerName,
+      email: ownerEmail,
+      tier: 'admin',
+      role: 'Owner',
+      businessId: bizId,
+      businessName: newBiz.name,
+      businessSlug: slug,
+      status: 'active',
+      emailVerified: true,
+      lastActiveAt: now.toISOString(),
+      createdAt: now.toISOString(),
+    };
+
+    const starterInvoice: SubscriptionInvoice = {
+      id: `subinv-${crypto.randomUUID().slice(0, 8)}`,
+      invoiceNo: `MSF-SUB-${now.getFullYear()}-${String(db.subscriptionInvoices.length + 1101)}`,
+      businessId: bizId,
+      businessName: newBiz.name,
+      businessSlug: slug,
+      planId: requestedPlan,
+      amount: planMeta.monthlyPriceKes,
+      currency: 'KES',
+      status: requestedPlan === 'Trial' ? 'paid' : 'pending',
+      paymentMethod:
+        db.platformBillingGateways.find((g) => g.enabled)?.displayName ||
+        'Safaricom M-Pesa Daraja (SaaS C2B Paybill)',
+      paymentRef: requestedPlan === 'Trial' ? 'TRIAL-14D' : 'PENDING-SUB',
+      periodLabel: now.toLocaleDateString('en-US', { month: 'short', year: 'numeric' }),
+      dueDate: renewsAt,
+      paidAt: requestedPlan === 'Trial' ? now.toISOString() : undefined,
+    };
+
     db.businesses.push(newBiz);
     db.stores.push(newStore);
     db.employees.push(...starterEmployees);
     db.products.push(...starterProducts);
+    db.platformUsers.unshift(ownerUser);
+    db.subscriptionInvoices.unshift(starterInvoice);
 
     appendAudit({
-      actor: sanitizeText(req.body?.ownerName, 80) || 'Business Owner',
+      actor: ownerName,
       role: 'Owner',
-      action: `Onboarded "${newBiz.name}" (${slug}.misafarms.com) with branch "${newStore.name}"`,
+      action: `Onboarded "${newBiz.name}" (misafarms.com/${slug}) on ${requestedPlan} plan with branch "${newStore.name}"`,
       module: 'Onboarding Wizard',
       storeName: newStore.name,
       emailNotified: true,
-      recipientEmail: sanitizeText(req.body?.ownerEmail, 120) || 'admin@misafarms.co.ke',
+      recipientEmail: ownerEmail,
     });
 
     res.status(201).json({
@@ -372,6 +561,8 @@ async function startServer() {
       store: newStore,
       employees: starterEmployees,
       products: starterProducts,
+      platformUser: ownerUser,
+      subscriptionInvoice: starterInvoice,
     });
   });
 
@@ -575,6 +766,23 @@ async function startServer() {
     };
 
     db.employees.push(emp);
+    const bizRef = db.businesses.find((b) => b.id === businessId);
+    const pUser: PlatformUserRecord = {
+      id: `usr-${emp.id}`,
+      name: emp.name,
+      email: emp.email,
+      tier: 'employee',
+      role: emp.role,
+      businessId: emp.businessId,
+      businessName: bizRef?.name,
+      businessSlug: bizRef?.slug,
+      status: 'active',
+      emailVerified: true,
+      lastActiveAt: emp.createdAt,
+      createdAt: emp.createdAt,
+    };
+    db.platformUsers.unshift(pUser);
+
     appendAudit({
       actor: 'Business Admin',
       role: 'Owner',
@@ -583,7 +791,7 @@ async function startServer() {
       storeName: 'HR Directory',
     });
 
-    res.status(201).json({ employee: emp });
+    res.status(201).json({ employee: emp, platformUser: pUser });
   });
 
   app.post('/api/stores', (req: Request, res: Response) => {
@@ -1173,6 +1381,320 @@ async function startServer() {
     });
 
     res.status(201).json({ record });
+  });
+
+  // Super Admin SaaS Control Plane Endpoints
+  app.patch('/api/super-admin/businesses/:id', (req: Request, res: Response) => {
+    if (!isSuperAdminAuthorized(req)) {
+      res.status(403).json({ error: 'Super Admin session required.' });
+      return;
+    }
+    const biz = db.businesses.find((b) => b.id === req.params.id);
+    if (!biz) {
+      res.status(404).json({ error: 'Business not found.' });
+      return;
+    }
+
+    if (
+      typeof req.body?.subscriptionPlan === 'string' &&
+      ['Trial', 'Starter', 'Multi-Store Pro', 'Enterprise'].includes(req.body.subscriptionPlan)
+    ) {
+      const planId = req.body.subscriptionPlan as SubscriptionPlanId;
+      biz.subscriptionPlan = planId;
+      const planMeta = db.subscriptionPlans.find((p) => p.id === planId);
+      if (planMeta) {
+        biz.monthlyFee = planMeta.monthlyPriceKes;
+        biz.branchLimit = planMeta.branchLimit;
+      }
+    }
+    if (
+      typeof req.body?.subscriptionStatus === 'string' &&
+      ['active', 'trial', 'past_due', 'suspended'].includes(req.body.subscriptionStatus)
+    ) {
+      biz.subscriptionStatus = req.body.subscriptionStatus;
+    }
+    if (req.body?.branchLimit !== undefined && Number.isFinite(Number(req.body.branchLimit))) {
+      biz.branchLimit = Math.max(1, Math.min(999, Math.floor(Number(req.body.branchLimit))));
+    }
+    if (req.body?.monthlyFee !== undefined && Number.isFinite(Number(req.body.monthlyFee))) {
+      biz.monthlyFee = Math.max(0, Number(req.body.monthlyFee));
+    }
+    if (typeof req.body?.subscriptionRenewsAt === 'string' && req.body.subscriptionRenewsAt.trim()) {
+      biz.subscriptionRenewsAt = sanitizeText(req.body.subscriptionRenewsAt, 40);
+    }
+
+    appendAudit({
+      actor: 'Super Admin',
+      role: 'Owner',
+      action: `Updated SaaS subscription for "${biz.name}" (${biz.subscriptionPlan} · ${biz.subscriptionStatus})`,
+      module: 'Super Admin',
+      storeName: 'Platform Control',
+    });
+
+    res.json({ business: biz });
+  });
+
+  app.post('/api/super-admin/users', (req: Request, res: Response) => {
+    if (!isSuperAdminAuthorized(req)) {
+      res.status(403).json({ error: 'Super Admin session required.' });
+      return;
+    }
+    const name = sanitizeText(req.body?.name, 100);
+    const email = sanitizeText(req.body?.email, 160).toLowerCase();
+    const tier = ['super_admin', 'admin', 'employee', 'user'].includes(req.body?.tier)
+      ? req.body.tier
+      : 'admin';
+    const role = (sanitizeText(req.body?.role, 60) ||
+      (tier === 'super_admin' ? 'Super Admin' : 'Owner')) as PlatformUserRecord['role'];
+    const businessId = sanitizeText(req.body?.businessId, 60) || undefined;
+
+    if (!name || !email || !email.includes('@')) {
+      res.status(400).json({ error: 'Valid name and email are required.' });
+      return;
+    }
+
+    const biz = businessId ? db.businesses.find((b) => b.id === businessId) : undefined;
+    const now = new Date().toISOString();
+    const user: PlatformUserRecord = {
+      id: `usr-${crypto.randomUUID().slice(0, 8)}`,
+      name,
+      email,
+      tier,
+      role,
+      businessId: biz?.id,
+      businessName: biz?.name,
+      businessSlug: biz?.slug,
+      status: 'active',
+      emailVerified: true,
+      lastActiveAt: now,
+      createdAt: now,
+    };
+
+    db.platformUsers.unshift(user);
+    appendAudit({
+      actor: 'Super Admin',
+      role: 'Owner',
+      action: `Provisioned SaaS user ${user.name} (${user.email}) as ${user.tier}`,
+      module: 'Super Admin Users',
+      storeName: biz?.name || 'Platform Global',
+      emailNotified: true,
+      recipientEmail: user.email,
+    });
+
+    res.status(201).json({ user });
+  });
+
+  app.patch('/api/super-admin/users/:id', (req: Request, res: Response) => {
+    if (!isSuperAdminAuthorized(req)) {
+      res.status(403).json({ error: 'Super Admin session required.' });
+      return;
+    }
+    const user = db.platformUsers.find((u) => u.id === req.params.id);
+    if (!user) {
+      res.status(404).json({ error: 'Software user not found.' });
+      return;
+    }
+
+    if (req.body?.status === 'active' || req.body?.status === 'suspended') {
+      user.status = req.body.status;
+    }
+    if (['super_admin', 'admin', 'employee', 'user'].includes(req.body?.tier)) {
+      user.tier = req.body.tier;
+    }
+    if (typeof req.body?.role === 'string' && req.body.role.trim()) {
+      user.role = sanitizeText(req.body.role, 60) as PlatformUserRecord['role'];
+    }
+    if (typeof req.body?.businessId === 'string') {
+      const biz = db.businesses.find((b) => b.id === req.body.businessId);
+      user.businessId = biz?.id;
+      user.businessName = biz?.name;
+      user.businessSlug = biz?.slug;
+    }
+
+    appendAudit({
+      actor: 'Super Admin',
+      role: 'Owner',
+      action: `Updated user "${user.email}" (${user.tier} · ${user.status})`,
+      module: 'Super Admin Users',
+      storeName: user.businessName || 'Platform Global',
+    });
+
+    res.json({ user });
+  });
+
+  app.patch('/api/super-admin/plans', (req: Request, res: Response) => {
+    if (!isSuperAdminAuthorized(req)) {
+      res.status(403).json({ error: 'Super Admin session required.' });
+      return;
+    }
+    if (!Array.isArray(req.body?.plans)) {
+      res.status(400).json({ error: 'Plans array is required.' });
+      return;
+    }
+    db.subscriptionPlans = req.body.plans.slice(0, 10).map((p: SubscriptionPlanTier) => ({
+      id: p.id,
+      name: sanitizeText(p.name, 60),
+      tagline: sanitizeText(p.tagline, 120),
+      monthlyPriceKes: Math.max(0, Number(p.monthlyPriceKes) || 0),
+      monthlyPriceUsd: Math.max(0, Number(p.monthlyPriceUsd) || 0),
+      branchLimit: Math.max(1, Math.floor(Number(p.branchLimit) || 1)),
+      userLimit: Math.max(1, Math.floor(Number(p.userLimit) || 5)),
+      etimsIncluded: Boolean(p.etimsIncluded),
+      highlighted: Boolean(p.highlighted),
+    }));
+
+    appendAudit({
+      actor: 'Super Admin',
+      role: 'Owner',
+      action: 'Updated SaaS subscription plan pricing & branch limits',
+      module: 'Super Admin Billing',
+      storeName: 'Platform Control',
+    });
+
+    res.json({ subscriptionPlans: db.subscriptionPlans });
+  });
+
+  app.put('/api/super-admin/billing-gateways', (req: Request, res: Response) => {
+    if (!isSuperAdminAuthorized(req)) {
+      res.status(403).json({ error: 'Super Admin session required.' });
+      return;
+    }
+    if (!Array.isArray(req.body?.gateways)) {
+      res.status(400).json({ error: 'Gateways array is required.' });
+      return;
+    }
+
+    const secretUpdates =
+      req.body?.secretUpdates && typeof req.body.secretUpdates === 'object'
+        ? (req.body.secretUpdates as Record<string, { consumerKey?: string }>)
+        : {};
+
+    db.platformBillingGateways = req.body.gateways.slice(0, 20).map((g: PlatformBillingGateway) => {
+      const id = sanitizeText(g.id, 60) || `saas-gw-${crypto.randomUUID().slice(0, 6)}`;
+      const incomingSecret = secretUpdates[id]?.consumerKey;
+      if (typeof incomingSecret === 'string' && incomingSecret.trim().length > 0) {
+        db.platformGatewaySecrets.set(id, {
+          consumerKey: incomingSecret.trim(),
+          secretConfiguredAt: new Date().toISOString(),
+        });
+      }
+      return {
+        id,
+        provider: g.provider || 'custom',
+        displayName: sanitizeText(g.displayName, 100),
+        enabled: Boolean(g.enabled),
+        mode: g.mode || 'Custom',
+        shortcodeOrAccount: sanitizeText(g.shortcodeOrAccount, 80),
+        accountPrefix: sanitizeText(g.accountPrefix, 40),
+        currencies: Array.isArray(g.currencies) ? g.currencies.slice(0, 10) : ['KES'],
+        environment: g.environment === 'Sandbox' ? 'Sandbox' : 'Production',
+        webhookUrl: sanitizeText(g.webhookUrl, 200),
+        hasSecretConfigured:
+          Boolean(g.hasSecretConfigured) || db.platformGatewaySecrets.has(id),
+        settlementSchedule: sanitizeText(g.settlementSchedule, 80) || 'T+1 Settlement',
+        instructions: sanitizeText(g.instructions, 240) || undefined,
+      };
+    });
+
+    appendAudit({
+      actor: 'Super Admin',
+      role: 'Owner',
+      action: `Configured ${db.platformBillingGateways.filter((g) => g.enabled).length} SaaS subscription collection gateways`,
+      module: 'Super Admin Billing Config',
+      storeName: 'Platform Control',
+    });
+
+    res.json({ platformBillingGateways: db.platformBillingGateways });
+  });
+
+  app.post('/api/subscriptions/pay', (req: Request, res: Response) => {
+    const businessId = sanitizeText(req.body?.businessId, 60);
+    const planId: SubscriptionPlanId = ['Trial', 'Starter', 'Multi-Store Pro', 'Enterprise'].includes(
+      req.body?.planId
+    )
+      ? req.body.planId
+      : 'Multi-Store Pro';
+    const gatewayId = sanitizeText(req.body?.gatewayId, 60);
+    const payerPhoneOrRef = sanitizeText(req.body?.payerRef, 60);
+
+    const biz = db.businesses.find((b) => b.id === businessId);
+    if (!biz) {
+      res.status(404).json({ error: 'Business not found.' });
+      return;
+    }
+
+    const gateway =
+      db.platformBillingGateways.find((g) => g.id === gatewayId && g.enabled) ||
+      db.platformBillingGateways.find((g) => g.enabled);
+    if (!gateway) {
+      res.status(400).json({ error: 'No enabled SaaS subscription payment gateway available.' });
+      return;
+    }
+
+    const plan = db.subscriptionPlans.find((p) => p.id === planId) || db.subscriptionPlans[1];
+    const now = new Date();
+    const renewsAt = new Date(now.getTime() + 30 * 86400000).toISOString().slice(0, 10);
+    const amount = biz.currency === 'USD' || biz.currency === 'GBP' ? plan.monthlyPriceUsd : plan.monthlyPriceKes;
+    const currency = biz.currency === 'USD' || biz.currency === 'GBP' ? 'USD' : 'KES';
+
+    biz.subscriptionPlan = plan.id;
+    biz.subscriptionStatus = 'active';
+    biz.monthlyFee = plan.monthlyPriceKes;
+    biz.branchLimit = plan.branchLimit;
+    biz.subscriptionRenewsAt = renewsAt;
+
+    // Mark any pending invoice for this business as paid or create a fresh paid invoice
+    const existingPending = db.subscriptionInvoices.find(
+      (inv) => inv.businessId === biz.id && inv.status !== 'paid'
+    );
+    const paymentRef =
+      payerPhoneOrRef || `SUB${crypto.randomBytes(3).toString('hex').toUpperCase()}`;
+
+    let invoice: SubscriptionInvoice;
+    if (existingPending) {
+      existingPending.planId = plan.id;
+      existingPending.amount = amount;
+      existingPending.currency = currency;
+      existingPending.status = 'paid';
+      existingPending.paymentMethod = gateway.displayName;
+      existingPending.paymentRef = paymentRef;
+      existingPending.paidAt = now.toISOString();
+      invoice = existingPending;
+    } else {
+      invoice = {
+        id: `subinv-${crypto.randomUUID().slice(0, 8)}`,
+        invoiceNo: `MSF-SUB-${now.getFullYear()}-${String(db.subscriptionInvoices.length + 1101)}`,
+        businessId: biz.id,
+        businessName: biz.name,
+        businessSlug: biz.slug,
+        planId: plan.id,
+        amount,
+        currency,
+        status: 'paid',
+        paymentMethod: gateway.displayName,
+        paymentRef,
+        periodLabel: now.toLocaleDateString('en-US', { month: 'short', year: 'numeric' }),
+        dueDate: renewsAt,
+        paidAt: now.toISOString(),
+      };
+      db.subscriptionInvoices.unshift(invoice);
+    }
+
+    appendAudit({
+      actor: biz.ownerName || 'Business Owner',
+      role: 'Owner',
+      action: `Paid ${currency} ${amount} subscription (${plan.name}) via ${gateway.displayName} (Ref: ${paymentRef})`,
+      module: 'SaaS Billing',
+      storeName: biz.name,
+      emailNotified: Boolean(biz.ownerEmail),
+      recipientEmail: biz.ownerEmail,
+    });
+
+    res.status(201).json({
+      business: biz,
+      invoice,
+      subscriptionInvoices: db.subscriptionInvoices,
+    });
   });
 
   if (process.env.NODE_ENV !== 'production') {

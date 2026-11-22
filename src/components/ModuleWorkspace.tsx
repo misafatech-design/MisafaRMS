@@ -697,7 +697,7 @@ export const ModuleWorkspace: React.FC<ModuleWorkspaceProps> = ({
               <span>Tier 3 · Portal User (Customer)</span>
             </div>
             <p className="mt-1.5 text-xs text-slate-600 dark:text-slate-400">
-              Restricted to {business.slug}.misafarms.com storefront, eCommerce orders, Subscriptions, Helpdesk tickets, and personal eTIMS invoices.
+              Restricted to misafarms.com/{business.slug} storefront, eCommerce orders, Subscriptions, Helpdesk tickets, and personal eTIMS invoices.
             </p>
           </div>
         </section>
@@ -1171,7 +1171,7 @@ export const ModuleWorkspace: React.FC<ModuleWorkspaceProps> = ({
 
         {accountTier === 'user' && (
           <span className="font-mono text-xs text-teal-700 dark:text-teal-400">
-            Customer Portal · https://{business.slug}.misafarms.com/
+            Customer Portal · https://misafarms.com/{business.slug}
           </span>
         )}
       </div>

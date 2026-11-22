@@ -10,6 +10,7 @@ interface LandingPageProps {
   onStartFreeOnboarding: () => void;
   onGoogleSignIn: () => void;
   onOpenPortalSlug: (slug: string) => void;
+  onOpenSuperAdmin?: () => void;
   firebaseUserEmail?: string | null;
   onContinueSignedIn: () => void;
 }
@@ -20,6 +21,7 @@ export const LandingPage: React.FC<LandingPageProps> = ({
   onStartFreeOnboarding,
   onGoogleSignIn,
   onOpenPortalSlug,
+  onOpenSuperAdmin,
   firebaseUserEmail,
   onContinueSignedIn,
 }) => {
@@ -176,6 +178,16 @@ export const LandingPage: React.FC<LandingPageProps> = ({
           >
             {firebaseUserEmail ? `Continue as ${firebaseUserEmail}` : 'Sign in with Google'}
           </button>
+
+          {onOpenSuperAdmin && (
+            <button
+              type="button"
+              onClick={onOpenSuperAdmin}
+              className="rounded-lg border border-slate-300 bg-white px-4 py-3 text-sm font-semibold text-slate-800 transition-colors hover:bg-slate-100 whitespace-nowrap"
+            >
+              Super Admin
+            </button>
+          )}
         </div>
 
         <p className="mt-3 font-mono text-xs text-slate-500">
@@ -238,7 +250,7 @@ export const LandingPage: React.FC<LandingPageProps> = ({
             <div className="space-y-2 md:col-span-7">
               <div className="flex items-center gap-2 text-xs font-semibold text-teal-700">
                 <Globe className="h-4 w-4" />
-                <span>Dedicated Business Subdomain Access</span>
+                <span>Dedicated Business Domain Path Access</span>
               </div>
               <h2 className="font-display text-xl font-bold text-slate-900">
                 Connect directly to your company portal
@@ -246,7 +258,11 @@ export const LandingPage: React.FC<LandingPageProps> = ({
               <p className="text-xs leading-relaxed text-slate-600">
                 Every onboarded business gets an isolated workspace URL such as{' '}
                 <span className="font-mono font-semibold text-slate-900">
-                  https://misafatech.misafarms.com/
+                  https://misafarms.com/misafatech
+                </span>{' '}
+                or{' '}
+                <span className="font-mono font-semibold text-slate-900">
+                  https://misafarms.com/giftmart
                 </span>{' '}
                 with separate Admin, Employee PIN, and Customer Portal access.
               </p>
@@ -254,17 +270,19 @@ export const LandingPage: React.FC<LandingPageProps> = ({
 
             <div className="space-y-2.5 md:col-span-5">
               <div className="flex items-center overflow-hidden rounded-lg border border-slate-300 bg-slate-50">
-                <span className="px-2.5 font-mono text-xs text-slate-500">https://</span>
+                <span className="border-r border-slate-200 px-2.5 py-2 font-mono text-xs text-slate-500">
+                  https://misafarms.com/
+                </span>
                 <input
                   type="text"
                   value={portalSlugInput}
                   onChange={(e) =>
                     setPortalSlugInput(e.target.value.toLowerCase().replace(/[^a-z0-9-]/g, ''))
                   }
-                  aria-label="Business portal subdomain"
-                  className="w-full bg-white px-2 py-2 font-mono text-xs font-semibold text-slate-900 focus:outline-none"
+                  placeholder="giftmart"
+                  aria-label="Business portal path handle"
+                  className="w-full bg-white px-2.5 py-2 font-mono text-xs font-semibold text-slate-900 focus:outline-none"
                 />
-                <span className="px-2.5 font-mono text-xs text-slate-500">.misafarms.com</span>
               </div>
               <button
                 type="button"
@@ -351,7 +369,7 @@ export const LandingPage: React.FC<LandingPageProps> = ({
             <ShieldCheck className="h-4 w-4 text-teal-700" />
             <span>MisafaRMS · Enterprise Retail & KRA eTIMS Cloud Platform</span>
           </div>
-          <span className="font-mono">https://misafatech.misafarms.com/</span>
+          <span className="font-mono">https://misafarms.com/misafatech</span>
         </div>
       </footer>
 

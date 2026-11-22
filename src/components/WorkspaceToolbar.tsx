@@ -97,7 +97,7 @@ export const WorkspaceToolbar: React.FC<WorkspaceToolbarProps> = ({
           <span aria-hidden="true" className="hidden md:inline">·</span>
           <span className="hidden md:inline-flex items-center gap-1 font-mono text-[11px] text-slate-500 dark:text-slate-400">
             <Globe className="h-3 w-3 text-teal-700 dark:text-teal-400" />
-            <span>{activeBusiness.slug}.misafarms.com</span>
+            <span>misafarms.com/{activeBusiness.slug}</span>
           </span>
         </div>
 
