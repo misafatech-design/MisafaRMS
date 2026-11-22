@@ -33,6 +33,7 @@ import {
   UserRole,
 } from '../types/erp';
 import { formatMoney, getTaxLabel, ROLE_PERMISSIONS } from '../utils/cryptoSync';
+import { PWAInstallButton } from './PWAInstallButton';
 
 interface PosTerminalProps {
   business: BusinessEntity;
@@ -453,6 +454,10 @@ export const PosTerminal: React.FC<PosTerminalProps> = ({
             </div>
           </form>
 
+          <div className="mt-4">
+            <PWAInstallButton />
+          </div>
+
           {canExitToAdmin && onExitToAdmin && (
             <div className="mt-4 border-t border-slate-100 pt-3 text-center dark:border-slate-800">
               <button
@@ -518,6 +523,8 @@ export const PosTerminal: React.FC<PosTerminalProps> = ({
                 </>
               )}
             </span>
+
+            <PWAInstallButton compact />
 
             <button
               type="button"

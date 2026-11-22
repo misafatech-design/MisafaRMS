@@ -84,19 +84,25 @@ export const PosAdminConsole: React.FC<PosAdminConsoleProps> = ({
     }
   };
 
+  const posOnlyPath = `/pos?biz=${encodeURIComponent(business.slug)}&store=${encodeURIComponent(reportStore.id)}`;
+
   const handleDownloadPosShortcut = (type: 'launcher' | 'cheatsheet') => {
     const portalUrl =
       typeof window !== 'undefined'
-        ? `${window.location.origin}/?pos=1`
-        : `https://${business.slug}.misafarms.com/?pos=1`;
+        ? `${window.location.origin}${posOnlyPath}`
+        : `https://${business.slug}.misafarms.com${posOnlyPath}`;
 
     if (type === 'launcher') {
       const html = `<!doctype html>
 <html>
-<head><meta charset="utf-8"><title>${business.name} — POS Register</title></head>
-<body style="font-family:sans-serif;text-align:center;padding:48px;">
+<head>
+  <meta charset="utf-8">
+  <title>${business.name} — POS Register (${reportStore.code})</title>
+  <meta name="theme-color" content="#0f766e">
+</head>
+<body style="font-family:sans-serif;text-align:center;padding:48px;background:#f8fafc;color:#0f172a;">
   <h2>${business.name} · ${reportStore.name}</h2>
-  <p>Opening dedicated MisafaRMS POS Register (${reportStore.registerId})...</p>
+  <p>Opening dedicated POS-only register (${reportStore.registerId})...</p>
   <p><a href="${portalUrl}">${portalUrl}</a></p>
   <script>window.location.replace(${JSON.stringify(portalUrl)});</script>
 </body>
@@ -105,7 +111,7 @@ export const PosAdminConsole: React.FC<PosAdminConsoleProps> = ({
       const url = URL.createObjectURL(blob);
       const a = document.createElement('a');
       a.href = url;
-      a.download = `${business.slug}-pos-shortcut.html`;
+      a.download = `${business.slug}-${reportStore.code.toLowerCase()}-pos-shortcut.html`;
       a.click();
       URL.revokeObjectURL(url);
     } else {
@@ -286,6 +292,13 @@ CASHIER WORKFLOW
 
           <div className="flex flex-wrap items-center justify-between gap-3 border-t border-slate-200 pt-4 dark:border-slate-800">
             <div className="flex flex-wrap items-center gap-2">
+              <a
+                href={posOnlyPath}
+                className="inline-flex items-center gap-1.5 rounded-lg border border-teal-600/30 bg-teal-50 px-3 py-2 text-xs font-semibold text-teal-800 hover:bg-teal-100 dark:border-teal-700 dark:bg-teal-950/60 dark:text-teal-300"
+              >
+                <MonitorSmartphone className="h-3.5 w-3.5" />
+                <span>Open Installable POS (/pos)</span>
+              </a>
               <button
                 type="button"
                 onClick={() => handleDownloadPosShortcut('launcher')}

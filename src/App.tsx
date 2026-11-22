@@ -67,6 +67,52 @@ import {
 import { decryptOfflinePayload, encryptOfflinePayload } from './utils/cryptoSync';
 
 const OFFLINE_QUEUE_STORAGE = 'misafarms_encrypted_offline_queue_v1';
+const POS_BINDING_STORAGE = 'misafarms_pos_binding_v1';
+
+function detectDedicatedPosEntry(): {
+  isPosOnly: boolean;
+  bizSlug: string | null;
+  storeId: string | null;
+} {
+  if (typeof window === 'undefined') {
+    return { isPosOnly: false, bizSlug: null, storeId: null };
+  }
+  const params = new URLSearchParams(window.location.search);
+  const isPosPath =
+    window.location.pathname === '/pos' || window.location.pathname.startsWith('/pos/');
+  const isPosQuery = params.get('pos') === '1';
+  const isStandalone =
+    window.matchMedia('(display-mode: standalone)').matches ||
+    (window.navigator as unknown as { standalone?: boolean }).standalone === true;
+
+  const isPosOnly = isPosPath || isPosQuery || isStandalone;
+  let bizSlug = params.get('biz');
+  let storeId = params.get('store');
+
+  if (bizSlug || storeId) {
+    try {
+      window.localStorage.setItem(
+        POS_BINDING_STORAGE,
+        JSON.stringify({ bizSlug, storeId })
+      );
+    } catch {
+      // Ignore storage error
+    }
+  } else if (isPosOnly) {
+    try {
+      const saved = window.localStorage.getItem(POS_BINDING_STORAGE);
+      if (saved) {
+        const parsed = JSON.parse(saved) as { bizSlug?: string; storeId?: string };
+        bizSlug = parsed.bizSlug || null;
+        storeId = parsed.storeId || null;
+      }
+    } catch {
+      // Ignore parse error
+    }
+  }
+
+  return { isPosOnly, bizSlug, storeId };
+}
 
 interface QueuedOfflineCheckout {
   id: string;
@@ -96,9 +142,27 @@ function stripUndefined<T extends Record<string, unknown>>(obj: T): Partial<T> {
 }
 
 function MisafaWorkspaceApp() {
-  const initialPosShortcut =
-    typeof window !== 'undefined' &&
-    new URLSearchParams(window.location.search).get('pos') === '1';
+  const initialEntry = useMemo(() => detectDedicatedPosEntry(), []);
+  const initialPosShortcut = initialEntry.isPosOnly;
+
+  const initialMatchedBiz = useMemo(() => {
+    if (!initialEntry.bizSlug) return SEED_BUSINESSES[0];
+    return (
+      SEED_BUSINESSES.find(
+        (b) => b.slug.toLowerCase() === initialEntry.bizSlug!.toLowerCase()
+      ) || SEED_BUSINESSES[0]
+    );
+  }, [initialEntry.bizSlug]);
+
+  const initialMatchedStore = useMemo(() => {
+    if (initialEntry.storeId) {
+      const found = SEED_STORES.find(
+        (s) => s.id === initialEntry.storeId && s.businessId === initialMatchedBiz.id
+      );
+      if (found) return found;
+    }
+    return SEED_STORES.find((s) => s.businessId === initialMatchedBiz.id) || SEED_STORES[0];
+  }, [initialEntry.storeId, initialMatchedBiz.id]);
 
   const [showLanding, setShowLanding] = useState(!initialPosShortcut);
   const [posKioskMode, setPosKioskMode] = useState(initialPosShortcut);
@@ -115,10 +179,14 @@ function MisafaWorkspaceApp() {
   const [auditLogs, setAuditLogs] = useState<AuditLogEntry[]>(SEED_AUDIT_LOGS);
   const [erpRecords, setErpRecords] = useState<ErpRecord[]>(SEED_ERP_RECORDS);
 
-  const [activeBusinessId, setActiveBusinessId] = useState<string>(SEED_BUSINESSES[0].id);
-  const [activeStoreId, setActiveStoreId] = useState<string>(SEED_STORES[0].id);
-  const [accountTier, setAccountTier] = useState<AccountTier>('admin');
-  const [activeRole, setActiveRole] = useState<UserRole>('Owner');
+  const [activeBusinessId, setActiveBusinessId] = useState<string>(initialMatchedBiz.id);
+  const [activeStoreId, setActiveStoreId] = useState<string>(initialMatchedStore.id);
+  const [accountTier, setAccountTier] = useState<AccountTier>(
+    initialPosShortcut ? 'employee' : 'admin'
+  );
+  const [activeRole, setActiveRole] = useState<UserRole>(
+    initialPosShortcut ? 'Cashier' : 'Owner'
+  );
   const [activeEmployee, setActiveEmployee] = useState<EmployeeRecord | null>(SEED_EMPLOYEES[0]);
   const [sessionToken, setSessionToken] = useState<string | null>(null);
 
@@ -208,6 +276,21 @@ function MisafaWorkspaceApp() {
           setAutomations(data.automations);
           setAuditLogs(data.auditLogs);
           setErpRecords(data.erpRecords);
+
+          if (initialEntry.bizSlug) {
+            const matchedBiz = (data.businesses as BusinessEntity[]).find(
+              (b) => b.slug.toLowerCase() === initialEntry.bizSlug!.toLowerCase()
+            );
+            if (matchedBiz) {
+              setActiveBusinessId(matchedBiz.id);
+              const matchedStore = (data.stores as StoreBranch[]).find(
+                (s) =>
+                  s.businessId === matchedBiz.id &&
+                  (!initialEntry.storeId || s.id === initialEntry.storeId)
+              );
+              if (matchedStore) setActiveStoreId(matchedStore.id);
+            }
+          }
         }
       } catch {
         // Fallback cleanly to seeded state when offline
@@ -277,6 +360,14 @@ function MisafaWorkspaceApp() {
     () => businessStores.find((s) => s.id === activeStoreId) || businessStores[0],
     [businessStores, activeStoreId]
   );
+
+  useEffect(() => {
+    if (initialPosShortcut || (!selectedModule && topTab === 'pos')) {
+      document.title = `${activeBusiness.name} — POS Register (${activeStore.registerId})`;
+    } else {
+      document.title = 'MisafaRMS — Enterprise Retail Management & Kenya eTIMS ERP';
+    }
+  }, [initialPosShortcut, selectedModule, topTab, activeBusiness.name, activeStore.registerId]);
 
   const businessEmployees = useMemo(
     () => employees.filter((e) => e.businessId === activeBusiness.id),
@@ -938,6 +1029,10 @@ function MisafaWorkspaceApp() {
             setShowLanding(false);
           }}
           onEmployeePosLogin={() => {
+            if (typeof window !== 'undefined') {
+              window.location.assign('/pos?biz=misafatech&store=store-nbo-01');
+              return;
+            }
             handleSelectBusiness('biz-savannah');
             setAccountTier('employee');
             setActiveRole('Cashier');
@@ -978,7 +1073,7 @@ function MisafaWorkspaceApp() {
   }
 
   // Dedicated full-screen POS register mode: NO ERP TopBar, NO WorkspaceToolbar, NO Admin configuration buttons
-  if (!selectedModule && topTab === 'pos') {
+  if (initialPosShortcut || (!selectedModule && topTab === 'pos')) {
     return (
       <PosTerminal
         business={activeBusiness}
@@ -988,14 +1083,14 @@ function MisafaWorkspaceApp() {
         activeEmployee={activeEmployee}
         onUnlockByPin={(pin) => {
           const matched = handleUnlockByPin(pin);
-          if (matched && accountTier !== 'admin') {
+          if (matched && (accountTier !== 'admin' || initialPosShortcut)) {
             setPosKioskMode(true);
           }
           return matched;
         }}
         activeRole={activeRole}
         isOffline={isOffline}
-        canExitToAdmin={accountTier === 'admin' && !posKioskMode}
+        canExitToAdmin={!initialPosShortcut && accountTier === 'admin' && !posKioskMode}
         onExitToAdmin={() => {
           setSelectedModule(null);
           setTopTab('apps');
