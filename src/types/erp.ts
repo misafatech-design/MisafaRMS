@@ -12,6 +12,69 @@ export type TaxCode = 'B_16' | 'E_0' | 'A_EXEMPT';
 
 export type PaymentMethod = string;
 
+export type LayoutMode = 'retail_shelves' | 'restaurant_tables' | 'hybrid';
+
+export type SlotStatus = 'available' | 'occupied' | 'needs_clearing' | 'needs_restock';
+
+export interface ZoneSlot {
+  id: string;
+  code: string;
+  label: string;
+  capacity: number;
+  status: SlotStatus;
+  assignedEmployeeName?: string;
+  activeOrderTotal?: number;
+  lastUpdatedAt?: string;
+}
+
+export interface BusinessZone {
+  id: string;
+  storeId: string;
+  name: string;
+  kind: 'floor' | 'section';
+  slots: ZoneSlot[];
+}
+
+export interface BusinessLayoutConfig {
+  layoutMode: LayoutMode;
+  zoneLabel: string;
+  slotLabel: string;
+  autoMarkTableNeedsClearing: boolean;
+  showShelfOnPosTile: boolean;
+  zones: BusinessZone[];
+}
+
+export interface CategoryGroup {
+  id: string;
+  name: string;
+  subCategories: string[];
+}
+
+export interface PromoOffer {
+  id: string;
+  name: string;
+  code?: string;
+  type: 'percent_off' | 'fixed_off' | 'min_qty_percent';
+  value: number;
+  minQty?: number;
+  minSpend?: number;
+  targetCategory: string;
+  active: boolean;
+  badgeText: string;
+}
+
+export interface ShiftAttendanceLog {
+  id: string;
+  businessId: string;
+  employeeId: string;
+  employeeName: string;
+  role: UserRole;
+  branchId: string;
+  action: 'clock_in' | 'clock_out';
+  timestamp: string;
+  note?: string;
+}
+
 export interface PosCustomizationConfig {
   receiptHeader: string;
   receiptFooter: string;
@@ -59,6 +122,13 @@ export interface EmployeeRecord {
   active: boolean;
   permissions: EmployeePermissionSet;
   avatarUrl?: string;
+  clockedIn?: boolean;
+  lastClockInAt?: string;
+  lastClockOutAt?: string;
+  tipsEarned?: number;
+  ratingAvg?: number;
+  ratingCount?: number;
+  ordersHandled?: number;
   createdAt: string;
 }
 
@@ -91,6 +161,9 @@ export interface BusinessEntity {
   installedModuleIds: string[];
   posConfig: PosCustomizationConfig;
   paymentGateways: PaymentGatewayConfig[];
+  layoutConfig?: BusinessLayoutConfig;
+  catalogTaxonomy?: CategoryGroup[];
+  offers?: PromoOffer[];
   createdAt: string;
 }
 
@@ -102,6 +175,10 @@ export interface ProductItem {
   barcode: string;
   name: string;
   category: string;
+  subCategory?: string;
+  zoneId?: string;
+  slotId?: string;
+  shelfCode?: string;
   price: number;
   cost: number;
   taxCode: TaxCode;
@@ -139,6 +216,11 @@ export interface SaleTransaction {
   subtotal: number;
   taxAmount: number;
   discountTotal: number;
+  offerName?: string;
+  offerDiscount?: number;
+  tipAmount?: number;
+  tableOrSlotLabel?: string;
+  staffRating?: number;
   total: number;
   amountTendered: number;
   changeDue: number;

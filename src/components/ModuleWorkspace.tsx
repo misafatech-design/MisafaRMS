@@ -2,13 +2,18 @@ import React, { useMemo, useState } from 'react';
 import {
   ArrowLeftRight,
   CheckCircle2,
+  Clock,
   Eye,
   EyeOff,
   KeyRound,
+  LogIn,
+  LogOut,
+  MapPin,
   PackageCheck,
   Plus,
   RefreshCw,
   Shield,
+  Star,
   Users,
 } from 'lucide-react';
 import {
@@ -19,6 +24,8 @@ import {
   EmployeeRecord,
   ErpRecord,
   ProductItem,
+  ShiftAttendanceLog,
+  SlotStatus,
   StoreBranch,
   TaxCode,
   UserRole,
@@ -37,6 +44,7 @@ interface ModuleWorkspaceProps {
   activeStore: StoreBranch;
   products: ProductItem[];
   employees: EmployeeRecord[];
+  attendanceLogs: ShiftAttendanceLog[];
   records: ErpRecord[];
   accountTier: AccountTier;
   activeRole: UserRole;
@@ -44,6 +52,10 @@ interface ModuleWorkspaceProps {
     name: string;
     sku: string;
     category: string;
+    subCategory?: string;
+    zoneId?: string;
+    slotId?: string;
+    shelfCode?: string;
     price: number;
     cost: number;
     initialQty: number;
@@ -64,6 +76,16 @@ interface ModuleWorkspaceProps {
     grossSalary: number;
     permissions: EmployeePermissionSet;
   }) => Promise<void>;
+  onEmployeeAttendance: (
+    employeeId: string,
+    action: 'clock_in' | 'clock_out',
+    note?: string
+  ) => Promise<void>;
+  onSlotStatusChange: (
+    zoneId: string,
+    slotId: string,
+    status: SlotStatus
+  ) => Promise<void>;
   onReceivePurchaseOrder: (recordId: string) => Promise<void>;
   onCreateRecord: (payload: {
     moduleId: string;
@@ -144,21 +166,62 @@ export const ModuleWorkspace: React.FC<ModuleWorkspaceProps> = ({
   activeStore,
   products,
   employees,
+  attendanceLogs,
   records,
   accountTier,
   activeRole,
   onCreateProduct,
   onTransferStock,
   onCreateEmployee,
+  onEmployeeAttendance,
+  onSlotStatusChange,
   onReceivePurchaseOrder,
   onCreateRecord,
 }) => {
   const perms = ROLE_PERMISSIONS[activeRole];
 
+  const taxonomy = useMemo(
+    () =>
+      business.catalogTaxonomy && business.catalogTaxonomy.length > 0
+        ? business.catalogTaxonomy
+        : [
+            { id: 'cat-bev', name: 'Beverages', subCategories: ['Coffee', 'Tea'] },
+            { id: 'cat-pan', name: 'Pantry', subCategories: ['Cooking Oils'] },
+            { id: 'cat-sta', name: 'Staples', subCategories: ['Flour & Rice'] },
+          ],
+    [business.catalogTaxonomy]
+  );
+
+  const layoutZones = useMemo(
+    () => business.layoutConfig?.zones || [],
+    [business.layoutConfig]
+  );
+
+  const allShelfSlots = useMemo(() => {
+    const out: Array<{ zoneId: string; zoneName: string; slotId: string; code: string; label: string; status: SlotStatus }> = [];
+    for (const z of layoutZones) {
+      for (const s of z.slots) {
+        out.push({
+          zoneId: z.id,
+          zoneName: z.name,
+          slotId: s.id,
+          code: s.code,
+          label: s.label,
+          status: s.status,
+        });
+      }
+    }
+    return out;
+  }, [layoutZones]);
+
   // Inventory state
   const [newSkuName, setNewSkuName] = useState('');
   const [newSkuCode, setNewSkuCode] = useState('');
-  const [newSkuCategory, setNewSkuCategory] = useState('Beverages');
+  const [newSkuCategory, setNewSkuCategory] = useState(taxonomy[0]?.name || 'Beverages');
+  const [newSkuSubCategory, setNewSkuSubCategory] = useState(
+    taxonomy[0]?.subCategories[0] || ''
+  );
+  const [newSkuSlotKey, setNewSkuSlotKey] = useState('');
   const [newSkuPrice, setNewSkuPrice] = useState('450');
   const [newSkuQty, setNewSkuQty] = useState('30');
   const [newSkuTax, setNewSkuTax] = useState<TaxCode>('B_16');
@@ -203,13 +266,21 @@ export const ModuleWorkspace: React.FC<ModuleWorkspaceProps> = ({
 
   // Specialized Inventory & Multi-Store Transfer Workspace
   if (module.id === 'inventory') {
+    const selectedTaxGroup = taxonomy.find((c) => c.name === newSkuCategory);
+    const subCategoryOptions = selectedTaxGroup?.subCategories || [];
+
     const handleAddSku = async (e: React.FormEvent) => {
       e.preventDefault();
       if (!newSkuName.trim()) return;
+      const matchedSlot = allShelfSlots.find((s) => `${s.zoneId}::${s.slotId}` === newSkuSlotKey);
       await onCreateProduct({
         name: newSkuName.trim(),
         sku: newSkuCode.trim(),
         category: newSkuCategory,
+        subCategory: newSkuSubCategory || undefined,
+        zoneId: matchedSlot?.zoneId,
+        slotId: matchedSlot?.slotId,
+        shelfCode: matchedSlot ? `${matchedSlot.code} · ${matchedSlot.label}` : undefined,
         price: Number(newSkuPrice) || 100,
         cost: Math.round((Number(newSkuPrice) || 100) * 0.7),
         initialQty: Number(newSkuQty) || 0,
@@ -239,10 +310,10 @@ export const ModuleWorkspace: React.FC<ModuleWorkspaceProps> = ({
       <div className="space-y-6">
         <div>
           <h1 className="font-display text-2xl font-bold text-slate-900 dark:text-slate-100">
-            Multi-Store Inventory & Dynamics Matrix Control
+            Multi-Store Inventory, Shelves & Product Taxonomy
           </h1>
           <p className="mt-1 text-sm text-slate-600 dark:text-slate-400">
-            Track branch stock levels, KRA tax classifications, variant matrices, and instant inter-store transfers.
+            Assign products to physical shelves/sections for fast restocking while maintaining separate 2-tier Categories & Subcategories.
           </p>
         </div>
 
@@ -271,13 +342,46 @@ export const ModuleWorkspace: React.FC<ModuleWorkspaceProps> = ({
                 placeholder="SKU (auto if blank)"
                 className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 font-mono text-xs text-slate-900 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-100"
               />
-              <input
-                type="text"
+              <select
                 value={newSkuCategory}
-                onChange={(e) => setNewSkuCategory(e.target.value)}
-                placeholder="Category"
+                onChange={(e) => {
+                  const cat = e.target.value;
+                  setNewSkuCategory(cat);
+                  const grp = taxonomy.find((c) => c.name === cat);
+                  setNewSkuSubCategory(grp?.subCategories[0] || '');
+                }}
                 className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-900 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-100"
-              />
+              >
+                {taxonomy.map((c) => (
+                  <option key={c.id} value={c.name}>
+                    Category: {c.name}
+                  </option>
+                ))}
+              </select>
+              <select
+                value={newSkuSubCategory}
+                onChange={(e) => setNewSkuSubCategory(e.target.value)}
+                className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-900 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-100"
+              >
+                <option value="">Subcategory (optional)</option>
+                {subCategoryOptions.map((sub) => (
+                  <option key={sub} value={sub}>
+                    Sub: {sub}
+                  </option>
+                ))}
+              </select>
+              <select
+                value={newSkuSlotKey}
+                onChange={(e) => setNewSkuSlotKey(e.target.value)}
+                className="sm:col-span-2 rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-900 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-100"
+              >
+                <option value="">Physical Section / Shelf Location (Optional)</option>
+                {allShelfSlots.map((s) => (
+                  <option key={`${s.zoneId}::${s.slotId}`} value={`${s.zoneId}::${s.slotId}`}>
+                    {s.zoneName} → {s.code} ({s.label})
+                  </option>
+                ))}
+              </select>
               <select
                 value={newSkuTax}
                 onChange={(e) => setNewSkuTax(e.target.value as TaxCode)}
@@ -287,22 +391,24 @@ export const ModuleWorkspace: React.FC<ModuleWorkspaceProps> = ({
                 <option value="E_0">Zero-Rated 0% (Code E)</option>
                 <option value="A_EXEMPT">VAT Exempt (Code A)</option>
               </select>
-              <input
-                type="number"
-                min={1}
-                value={newSkuPrice}
-                onChange={(e) => setNewSkuPrice(e.target.value)}
-                placeholder={`Price (${business.currency})`}
-                className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 font-mono text-xs text-slate-900 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-100"
-              />
-              <input
-                type="number"
-                min={0}
-                value={newSkuQty}
-                onChange={(e) => setNewSkuQty(e.target.value)}
-                placeholder="Opening Stock Qty"
-                className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 font-mono text-xs text-slate-900 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-100"
-              />
+              <div className="grid grid-cols-2 gap-2">
+                <input
+                  type="number"
+                  min={1}
+                  value={newSkuPrice}
+                  onChange={(e) => setNewSkuPrice(e.target.value)}
+                  placeholder={`Price (${business.currency})`}
+                  className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 font-mono text-xs text-slate-900 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-100"
+                />
+                <input
+                  type="number"
+                  min={0}
+                  value={newSkuQty}
+                  onChange={(e) => setNewSkuQty(e.target.value)}
+                  placeholder="Opening Qty"
+                  className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 font-mono text-xs text-slate-900 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-100"
+                />
+              </div>
             </div>
             <button
               type="submit"
@@ -395,7 +501,8 @@ export const ModuleWorkspace: React.FC<ModuleWorkspaceProps> = ({
               <thead>
                 <tr className="border-b border-slate-200 text-slate-500 dark:border-slate-800 dark:text-slate-400">
                   <th className="px-5 py-3 font-medium">SKU / Barcode</th>
-                  <th className="px-5 py-3 font-medium">Product & Variants</th>
+                  <th className="px-5 py-3 font-medium">Product & Taxonomy</th>
+                  <th className="px-5 py-3 font-medium">Section / Shelf</th>
                   <th className="px-5 py-3 font-medium">KRA Tax</th>
                   <th className="px-5 py-3 text-right font-medium">Price</th>
                   {stores.map((s) => (
@@ -406,43 +513,85 @@ export const ModuleWorkspace: React.FC<ModuleWorkspaceProps> = ({
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
-                {products.map((p) => (
-                  <tr key={p.id} className="hover:bg-slate-50 dark:hover:bg-slate-800/40">
-                    <td className="px-5 py-3 font-mono text-slate-600 dark:text-slate-300">
-                      <div>{p.sku}</div>
-                      <div className="text-[11px] text-slate-400">{p.barcode}</div>
-                    </td>
-                    <td className="px-5 py-3">
-                      <p className="font-semibold text-slate-900 dark:text-slate-100">{p.name}</p>
-                      {p.variants && (
-                        <p className="text-[11px] text-slate-500 dark:text-slate-400">
-                          Matrix: {p.variants.join(' / ')}
+                {products.map((p) => {
+                  const slotMatch = allShelfSlots.find(
+                    (s) => s.zoneId === p.zoneId && s.slotId === p.slotId
+                  );
+                  const needsRestock = slotMatch?.status === 'needs_restock';
+
+                  return (
+                    <tr key={p.id} className="hover:bg-slate-50 dark:hover:bg-slate-800/40">
+                      <td className="px-5 py-3 font-mono text-slate-600 dark:text-slate-300">
+                        <div>{p.sku}</div>
+                        <div className="text-[11px] text-slate-400">{p.barcode}</div>
+                      </td>
+                      <td className="px-5 py-3">
+                        <p className="font-semibold text-slate-900 dark:text-slate-100">{p.name}</p>
+                        <p className="text-[11px] text-teal-700 dark:text-teal-400">
+                          {p.category}
+                          {p.subCategory ? ` › ${p.subCategory}` : ''}
                         </p>
-                      )}
-                    </td>
-                    <td className="px-5 py-3 text-slate-600 dark:text-slate-300">
-                      {getTaxLabel(p.taxCode, business.vatRate)}
-                    </td>
-                    <td className="px-5 py-3 text-right font-mono font-semibold tabular-nums">
-                      {formatMoney(p.price, business.currency)}
-                    </td>
-                    {stores.map((s) => {
-                      const q = p.stockByStore[s.id] ?? 0;
-                      return (
-                        <td
-                          key={s.id}
-                          className={`px-4 py-3 text-right font-mono tabular-nums ${
-                            q <= p.reorderPoint
-                              ? 'font-bold text-amber-700 dark:text-amber-400'
-                              : 'text-slate-800 dark:text-slate-200'
-                          }`}
-                        >
-                          {q}
-                        </td>
-                      );
-                    })}
-                  </tr>
-                ))}
+                        {p.variants && (
+                          <p className="text-[11px] text-slate-500 dark:text-slate-400">
+                            Matrix: {p.variants.join(' / ')}
+                          </p>
+                        )}
+                      </td>
+                      <td className="px-5 py-3">
+                        {p.shelfCode || slotMatch ? (
+                          <div className="flex flex-col items-start gap-1">
+                            <span className="inline-flex items-center gap-1 font-mono text-[11px] font-medium text-slate-700 dark:text-slate-300">
+                              <MapPin className="h-3 w-3 text-teal-600" />
+                              {p.shelfCode || `${slotMatch?.code} · ${slotMatch?.label}`}
+                            </span>
+                            {slotMatch && perms.canEditInventory && (
+                              <button
+                                type="button"
+                                onClick={() =>
+                                  onSlotStatusChange(
+                                    slotMatch.zoneId,
+                                    slotMatch.slotId,
+                                    needsRestock ? 'available' : 'needs_restock'
+                                  )
+                                }
+                                className={`rounded px-2 py-0.5 text-[10px] font-semibold ${
+                                  needsRestock
+                                    ? 'bg-amber-100 text-amber-800 hover:bg-emerald-100 hover:text-emerald-800 dark:bg-amber-950/60 dark:text-amber-300'
+                                    : 'bg-slate-100 text-slate-600 hover:bg-amber-100 hover:text-amber-800 dark:bg-slate-800 dark:text-slate-300'
+                                }`}
+                              >
+                                {needsRestock ? 'Restocked ✓' : 'Flag Restock'}
+                              </button>
+                            )}
+                          </div>
+                        ) : (
+                          <span className="text-[11px] text-slate-400">Unassigned</span>
+                        )}
+                      </td>
+                      <td className="px-5 py-3 text-slate-600 dark:text-slate-300">
+                        {getTaxLabel(p.taxCode, business.vatRate)}
+                      </td>
+                      <td className="px-5 py-3 text-right font-mono font-semibold tabular-nums">
+                        {formatMoney(p.price, business.currency)}
+                      </td>
+                      {stores.map((s) => {
+                        const q = p.stockByStore[s.id] ?? 0;
+                        return (
+                          <td
+                            key={s.id}
+                            className={`px-4 py-3 text-right font-mono tabular-nums ${
+                              q <= p.reorderPoint
+                                ? 'font-bold text-amber-700 dark:text-amber-400'
+                                : 'text-slate-800 dark:text-slate-200'
+                            }`}
+                          >
+                            {q}
+                          </td>
+                        );
+                      })}
+                    </tr>
+                  );
+                })}
               </tbody>
             </table>
           </div>
@@ -577,6 +726,8 @@ export const ModuleWorkspace: React.FC<ModuleWorkspaceProps> = ({
                 <tr className="border-b border-slate-200 text-slate-500 dark:border-slate-800 dark:text-slate-400">
                   <th className="px-5 py-2.5 font-medium">Employee</th>
                   <th className="px-5 py-2.5 font-medium">Role & Branch</th>
+                  <th className="px-5 py-2.5 font-medium">Shift Status</th>
+                  <th className="px-5 py-2.5 font-medium">Rating & Tips</th>
                   <th className="px-5 py-2.5 font-medium">POS PIN</th>
                   <th className="px-5 py-2.5 text-right font-medium">Max Disc</th>
                   <th className="px-5 py-2.5 font-medium">Granted Capabilities</th>
@@ -613,6 +764,56 @@ export const ModuleWorkspace: React.FC<ModuleWorkspaceProps> = ({
                           {branchName}
                         </p>
                       </td>
+                      <td className="px-5 py-3">
+                        <div className="flex flex-col items-start gap-1">
+                          <span
+                            className={`rounded px-2 py-0.5 text-[10px] font-semibold ${
+                              emp.clockedIn
+                                ? 'bg-emerald-100 text-emerald-800 dark:bg-emerald-950/60 dark:text-emerald-300'
+                                : 'bg-slate-100 text-slate-600 dark:bg-slate-800 dark:text-slate-300'
+                            }`}
+                          >
+                            {emp.clockedIn ? 'Clocked In' : 'Clocked Out'}
+                          </span>
+                          {canProvisionStaff && (
+                            <button
+                              type="button"
+                              onClick={() =>
+                                onEmployeeAttendance(
+                                  emp.id,
+                                  emp.clockedIn ? 'clock_out' : 'clock_in',
+                                  'Manager Attendance Override'
+                                )
+                              }
+                              className="inline-flex items-center gap-1 text-[11px] font-medium text-teal-700 hover:underline dark:text-teal-400"
+                            >
+                              {emp.clockedIn ? (
+                                <>
+                                  <LogOut className="h-3 w-3" />
+                                  <span>Clock Out</span>
+                                </>
+                              ) : (
+                                <>
+                                  <LogIn className="h-3 w-3" />
+                                  <span>Clock In</span>
+                                </>
+                              )}
+                            </button>
+                          )}
+                        </div>
+                      </td>
+                      <td className="px-5 py-3">
+                        <div className="flex items-center gap-1 font-mono font-semibold text-amber-600 dark:text-amber-400">
+                          <Star className="h-3.5 w-3.5 fill-current" />
+                          <span>{(emp.ratingAvg ?? 5).toFixed(2)}</span>
+                          <span className="text-[11px] font-normal text-slate-400">
+                            ({emp.ratingCount ?? 0})
+                          </span>
+                        </div>
+                        <p className="font-mono text-[11px] text-slate-600 dark:text-slate-300">
+                          Tips: {formatMoney(emp.tipsEarned ?? 0, business.currency)}
+                        </p>
+                      </td>
                       <td className="px-5 py-3 font-mono font-semibold text-teal-700 dark:text-teal-400">
                         {revealPins ? emp.pinCode : '••••'}
                       </td>
@@ -628,6 +829,55 @@ export const ModuleWorkspace: React.FC<ModuleWorkspaceProps> = ({
               </tbody>
             </table>
           </div>
+        </section>
+
+        {/* Recent Shift Attendance Logs */}
+        <section className="rounded-xl border border-slate-200 bg-white dark:border-slate-800 dark:bg-slate-900">
+          <div className="flex items-center gap-2 border-b border-slate-200 px-5 py-3.5 dark:border-slate-800">
+            <Clock className="h-4 w-4 text-teal-700 dark:text-teal-400" />
+            <h2 className="font-display text-sm font-semibold text-slate-900 dark:text-slate-100">
+              Recent Shift Clock-In & Clock-Out Logs
+            </h2>
+          </div>
+          {attendanceLogs.filter((l) => l.businessId === business.id).length === 0 ? (
+            <p className="px-5 py-6 text-xs text-slate-500 dark:text-slate-400">
+              No shift clock events recorded yet. Staff automatically clock in/out when unlocking POS with their PIN.
+            </p>
+          ) : (
+            <div className="divide-y divide-slate-100 dark:divide-slate-800">
+              {attendanceLogs
+                .filter((l) => l.businessId === business.id)
+                .slice(0, 12)
+                .map((log) => (
+                  <div
+                    key={log.id}
+                    className="flex flex-wrap items-center justify-between gap-2 px-5 py-2.5 text-xs"
+                  >
+                    <div className="flex items-center gap-2">
+                      <span
+                        className={`rounded px-2 py-0.5 text-[10px] font-semibold uppercase ${
+                          log.action === 'clock_in'
+                            ? 'bg-emerald-100 text-emerald-800 dark:bg-emerald-950/60 dark:text-emerald-300'
+                            : 'bg-slate-100 text-slate-700 dark:bg-slate-800 dark:text-slate-300'
+                        }`}
+                      >
+                        {log.action === 'clock_in' ? 'Clock In' : 'Clock Out'}
+                      </span>
+                      <span className="font-semibold text-slate-900 dark:text-slate-100">
+                        {log.employeeName}
+                      </span>
+                      <span className="text-slate-500 dark:text-slate-400">({log.role})</span>
+                      {log.note && (
+                        <span className="text-slate-500 dark:text-slate-400">· {log.note}</span>
+                      )}
+                    </div>
+                    <span className="font-mono text-[11px] text-slate-500 dark:text-slate-400">
+                      {new Date(log.timestamp).toLocaleString()}
+                    </span>
+                  </div>
+                ))}
+            </div>
+          )}
         </section>
 
         {/* Admin-Only Provision New Employee & PIN Form */}

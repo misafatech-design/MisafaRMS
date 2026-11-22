@@ -4,8 +4,12 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { createServer as createViteServer } from 'vite';
 import {
+  DEFAULT_CATALOG_TAXONOMY,
+  DEFAULT_LAYOUT_CONFIG,
   DEFAULT_PAYMENT_GATEWAYS,
   DEFAULT_POS_CONFIG,
+  DEFAULT_PROMO_OFFERS,
+  SEED_ATTENDANCE_LOGS,
   SEED_AUDIT_LOGS,
   SEED_AUTOMATIONS,
   SEED_BUSINESSES,
@@ -23,6 +27,8 @@ import {
   ErpRecord,
   ProductItem,
   SaleTransaction,
+  ShiftAttendanceLog,
+  SlotStatus,
   StoreBranch,
   StudioModel,
   UserRole,
@@ -36,6 +42,7 @@ interface ServerDatabase {
   businesses: BusinessEntity[];
   stores: StoreBranch[];
   employees: EmployeeRecord[];
+  attendanceLogs: ShiftAttendanceLog[];
   products: ProductItem[];
   transactions: SaleTransaction[];
   studioModels: StudioModel[];
@@ -49,6 +56,7 @@ const db: ServerDatabase = {
   businesses: structuredClone(SEED_BUSINESSES),
   stores: structuredClone(SEED_STORES),
   employees: structuredClone(SEED_EMPLOYEES),
+  attendanceLogs: structuredClone(SEED_ATTENDANCE_LOGS),
   products: structuredClone(SEED_PRODUCTS),
   transactions: structuredClone(SEED_TRANSACTIONS),
   studioModels: structuredClone(SEED_STUDIO_MODELS),
@@ -157,6 +165,7 @@ async function startServer() {
       businesses: db.businesses,
       stores: db.stores,
       employees: db.employees,
+      attendanceLogs: db.attendanceLogs,
       products: db.products,
       transactions: db.transactions,
       studioModels: db.studioModels,
@@ -229,6 +238,9 @@ async function startServer() {
       ],
       posConfig: structuredClone(DEFAULT_POS_CONFIG),
       paymentGateways: structuredClone(DEFAULT_PAYMENT_GATEWAYS),
+      layoutConfig: structuredClone(DEFAULT_LAYOUT_CONFIG),
+      catalogTaxonomy: structuredClone(DEFAULT_CATALOG_TAXONOMY),
+      offers: structuredClone(DEFAULT_PROMO_OFFERS),
       createdAt: new Date().toISOString(),
     };
 
@@ -381,6 +393,15 @@ async function startServer() {
     if (Array.isArray(req.body?.paymentGateways)) {
       biz.paymentGateways = req.body.paymentGateways.slice(0, 20);
     }
+    if (req.body?.layoutConfig && typeof req.body.layoutConfig === 'object') {
+      biz.layoutConfig = req.body.layoutConfig;
+    }
+    if (Array.isArray(req.body?.catalogTaxonomy)) {
+      biz.catalogTaxonomy = req.body.catalogTaxonomy.slice(0, 100);
+    }
+    if (Array.isArray(req.body?.offers)) {
+      biz.offers = req.body.offers.slice(0, 100);
+    }
     if (typeof req.body?.etimsMode === 'string' && ['OSCU', 'VSCU', 'Standard'].includes(req.body.etimsMode)) {
       biz.etimsMode = req.body.etimsMode as BusinessEntity['etimsMode'];
       biz.etimsEnabled = biz.etimsMode !== 'Standard';
@@ -398,6 +419,122 @@ async function startServer() {
     });
 
     res.json({ business: biz });
+  });
+
+  app.post('/api/businesses/:id/slot-status', (req: Request, res: Response) => {
+    const biz = db.businesses.find((b) => b.id === req.params.id);
+    if (!biz || !biz.layoutConfig) {
+      res.status(404).json({ error: 'Business layout configuration not found.' });
+      return;
+    }
+    const zoneId = sanitizeText(req.body?.zoneId, 60);
+    const slotId = sanitizeText(req.body?.slotId, 60);
+    const status = req.body?.status as SlotStatus;
+    if (!['available', 'occupied', 'needs_clearing', 'needs_restock'].includes(status)) {
+      res.status(400).json({ error: 'Invalid slot status.' });
+      return;
+    }
+    let updatedLabel = '';
+    for (const z of biz.layoutConfig.zones) {
+      if (zoneId && z.id !== zoneId) continue;
+      const slot = z.slots.find((s) => s.id === slotId);
+      if (slot) {
+        slot.status = status;
+        slot.lastUpdatedAt = new Date().toISOString();
+        if (typeof req.body?.assignedEmployeeName === 'string') {
+          slot.assignedEmployeeName = sanitizeText(req.body.assignedEmployeeName, 80) || undefined;
+        }
+        if (status === 'available') {
+          slot.activeOrderTotal = undefined;
+          slot.assignedEmployeeName = undefined;
+        } else if (req.body?.activeOrderTotal !== undefined) {
+          slot.activeOrderTotal = Number(req.body.activeOrderTotal) || undefined;
+        }
+        updatedLabel = `${z.name} · ${slot.code}`;
+      }
+    }
+    if (!updatedLabel) {
+      res.status(404).json({ error: 'Table or shelf slot not found.' });
+      return;
+    }
+    appendAudit({
+      actor: sanitizeText(req.body?.actor, 80) || 'Floor Staff',
+      role: 'Cashier',
+      action: `Updated ${updatedLabel} status to "${status}"`,
+      module: 'POS Floor & Shelves',
+      storeName: biz.name,
+    });
+    res.json({ business: biz });
+  });
+
+  app.post('/api/employees/attendance', (req: Request, res: Response) => {
+    const businessId = sanitizeText(req.body?.businessId, 60);
+    const employeeId = sanitizeText(req.body?.employeeId, 60);
+    const pinCode = sanitizeText(req.body?.pinCode, 8);
+    const action = req.body?.action === 'clock_out' ? 'clock_out' : 'clock_in';
+    const note = sanitizeText(req.body?.note, 140);
+
+    const emp = db.employees.find(
+      (e) =>
+        e.businessId === businessId &&
+        (employeeId ? e.id === employeeId : pinCode ? e.pinCode === pinCode : false)
+    );
+    if (!emp) {
+      res.status(404).json({ error: 'Employee not found for attendance update.' });
+      return;
+    }
+    const now = new Date().toISOString();
+    emp.clockedIn = action === 'clock_in';
+    if (action === 'clock_in') emp.lastClockInAt = now;
+    else emp.lastClockOutAt = now;
+
+    const log: ShiftAttendanceLog = {
+      id: `att-${crypto.randomUUID().slice(0, 8)}`,
+      businessId,
+      employeeId: emp.id,
+      employeeName: emp.name,
+      role: emp.role,
+      branchId: emp.branchId,
+      action,
+      timestamp: now,
+      note: note || (action === 'clock_in' ? 'POS Shift Clock-In' : 'POS Shift Clock-Out'),
+    };
+    db.attendanceLogs.unshift(log);
+    if (db.attendanceLogs.length > 200) db.attendanceLogs.pop();
+
+    appendAudit({
+      actor: emp.name,
+      role: emp.role,
+      action: `${action === 'clock_in' ? 'Clocked IN' : 'Clocked OUT'} (${log.note})`,
+      module: 'Attendance',
+      storeName: db.stores.find((s) => s.id === emp.branchId)?.name || 'Branch',
+    });
+
+    res.json({ employee: emp, log, attendanceLogs: db.attendanceLogs.slice(0, 60) });
+  });
+
+  app.post('/api/employees/rate', (req: Request, res: Response) => {
+    const businessId = sanitizeText(req.body?.businessId, 60);
+    const employeeName = sanitizeText(req.body?.employeeName, 100);
+    const transactionId = sanitizeText(req.body?.transactionId, 60);
+    const rating = Math.max(1, Math.min(5, Math.round(Number(req.body?.rating) || 5)));
+
+    const emp = db.employees.find(
+      (e) => e.businessId === businessId && e.name.toLowerCase() === employeeName.toLowerCase()
+    );
+    if (emp) {
+      const prevCount = emp.ratingCount ?? 0;
+      const prevAvg = emp.ratingAvg ?? 5;
+      const nextCount = prevCount + 1;
+      emp.ratingAvg = Math.round(((prevAvg * prevCount + rating) / nextCount) * 100) / 100;
+      emp.ratingCount = nextCount;
+    }
+    const tx = db.transactions.find((t) => t.id === transactionId);
+    if (tx) {
+      tx.staffRating = rating;
+    }
+
+    res.json({ employee: emp || null, transaction: tx || null });
   });
 
   app.post('/api/employees', (req: Request, res: Response) => {
@@ -504,6 +641,10 @@ async function startServer() {
     const barcode =
       sanitizeText(req.body?.barcode, 40) || `61611${Math.floor(1000000 + Math.random() * 8999999)}`;
     const category = sanitizeText(req.body?.category, 50) || 'General';
+    const subCategory = sanitizeText(req.body?.subCategory, 50) || undefined;
+    const zoneId = sanitizeText(req.body?.zoneId, 60) || undefined;
+    const slotId = sanitizeText(req.body?.slotId, 60) || undefined;
+    const shelfCode = sanitizeText(req.body?.shelfCode, 60) || undefined;
     const price = Number(req.body?.price);
     const cost = Number(req.body?.cost) || Math.round(price * 0.72);
     const initialQty = Math.max(0, Math.floor(Number(req.body?.initialQty) || 0));
@@ -528,6 +669,10 @@ async function startServer() {
       barcode,
       name,
       category,
+      subCategory,
+      zoneId,
+      slotId,
+      shelfCode,
       price,
       cost,
       taxCode,
@@ -651,7 +796,14 @@ async function startServer() {
       });
     }
 
-    const total = Math.round(subtotal * 100) / 100;
+    const offerName = sanitizeText(payload?.offerName, 100) || undefined;
+    const offerDiscount = Math.max(0, Math.min(subtotal, Number(payload?.offerDiscount) || 0));
+    const tipAmount = Math.max(0, Number(payload?.tipAmount) || 0);
+    const slotId = sanitizeText(payload?.slotId, 60) || undefined;
+    const tableOrSlotLabel = sanitizeText(payload?.tableOrSlotLabel, 80) || undefined;
+
+    const discountedSubtotal = Math.max(0, Math.round((subtotal - offerDiscount) * 100) / 100);
+    const total = Math.round((discountedSubtotal + tipAmount) * 100) / 100;
     const amountTendered = Math.max(total, Number(payload?.amountTendered) || total);
     const changeDue = Math.round((amountTendered - total) * 100) / 100;
     const seq = String(db.transactions.length + 4913).padStart(6, '0');
@@ -660,6 +812,7 @@ async function startServer() {
       : `INV-${store.code}-${seq}`;
 
     const customerEmail = sanitizeText(payload?.customerEmail, 140) || undefined;
+    const cashierName = sanitizeText(payload?.cashierName, 80) || 'Active Staff';
 
     const tx: SaleTransaction = {
       id: sanitizeText(payload?.id, 60) || `tx-${crypto.randomUUID().slice(0, 8)}`,
@@ -670,7 +823,7 @@ async function startServer() {
       storeId: store.id,
       storeName: store.name,
       cashierRole: role,
-      cashierName: sanitizeText(payload?.cashierName, 80) || 'Active Staff',
+      cashierName,
       customerName: sanitizeText(payload?.customerName, 80) || 'Walk-in Customer',
       customerPin: sanitizeText(payload?.customerPin, 20) || undefined,
       customerPhone: sanitizeText(payload?.customerPhone, 20) || undefined,
@@ -684,9 +837,13 @@ async function startServer() {
         sanitizeText(payload?.paymentRef, 40) ||
         `MP${crypto.randomBytes(4).toString('hex').toUpperCase()}`,
       currency: business.currency,
-      subtotal: total,
+      subtotal: discountedSubtotal,
       taxAmount: Math.round(taxAmount * 100) / 100,
-      discountTotal: Math.round(discountTotal * 100) / 100,
+      discountTotal: Math.round((discountTotal + offerDiscount) * 100) / 100,
+      offerName,
+      offerDiscount: offerDiscount > 0 ? Math.round(offerDiscount * 100) / 100 : undefined,
+      tipAmount: tipAmount > 0 ? Math.round(tipAmount * 100) / 100 : undefined,
+      tableOrSlotLabel,
       total,
       amountTendered,
       changeDue,
@@ -703,13 +860,36 @@ async function startServer() {
 
     db.transactions.unshift(tx);
 
+    // Credit employee tip & completed order performance counter
+    const emp = db.employees.find(
+      (e) => e.businessId === business.id && e.name.toLowerCase() === cashierName.toLowerCase()
+    );
+    if (emp) {
+      emp.ordersHandled = (emp.ordersHandled ?? 0) + 1;
+      if (tipAmount > 0) {
+        emp.tipsEarned = Math.round(((emp.tipsEarned ?? 0) + tipAmount) * 100) / 100;
+      }
+    }
+
+    // Update restaurant floor table status to needs_clearing after payment if applicable
+    if (slotId && business.layoutConfig) {
+      for (const z of business.layoutConfig.zones) {
+        const s = z.slots.find((sl) => sl.id === slotId);
+        if (s && z.kind === 'floor' && business.layoutConfig.autoMarkTableNeedsClearing) {
+          s.status = 'needs_clearing';
+          s.activeOrderTotal = undefined;
+          s.lastUpdatedAt = new Date().toISOString();
+        }
+      }
+    }
+
     // Cross-module sync: Automatically post Accounting General Ledger journal entry!
     db.erpRecords.unshift({
       id: `rec-acc-${crypto.randomUUID().slice(0, 6)}`,
       moduleId: 'accounting',
       businessId: business.id,
       title: `JRNL-${tx.receiptNo} · ${tx.channel} Settlement (${tx.paymentMethod})`,
-      subtitle: `Auto-posted from ${tx.channel} · Credit Revenue ${ (tx.total - tx.taxAmount).toFixed(2) } & VAT ${tx.taxAmount.toFixed(2)}`,
+      subtitle: `Auto-posted from ${tx.channel} · Credit Revenue ${(tx.total - tx.taxAmount).toFixed(2)} & VAT ${tx.taxAmount.toFixed(2)}`,
       status: 'Posted',
       amount: tx.total,
       currency: tx.currency,
@@ -738,6 +918,8 @@ async function startServer() {
     }
     res.status(201).json({
       transaction: result.transaction,
+      businesses: db.businesses,
+      employees: db.employees,
       products: db.products,
       auditLogs: db.auditLogs.slice(0, 30),
       erpRecords: db.erpRecords.slice(0, 60),

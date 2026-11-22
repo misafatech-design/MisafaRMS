@@ -70,7 +70,8 @@ service cloud.firestore {
         data.keys().hasOnly([
           'id', 'ownerId', 'slug', 'name', 'country', 'currency', 'taxAuthority',
           'taxPin', 'vatRate', 'etimsEnabled', 'etimsMode', 'paybillOrTill',
-          'installedModuleIds', 'posConfig', 'paymentGateways', 'createdAt', 'updatedAt'
+          'installedModuleIds', 'posConfig', 'paymentGateways', 'layoutConfig',
+          'catalogTaxonomy', 'offers', 'createdAt', 'updatedAt'
         ]) &&
         isValidId(data.id) &&
         isValidId(data.ownerId) &&
@@ -87,13 +88,20 @@ service cloud.firestore {
         (!('installedModuleIds' in data) || (data.installedModuleIds is list && data.installedModuleIds.size() <= 80 && (data.installedModuleIds.size() == 0 || data.installedModuleIds[0] is string))) &&
         (!('posConfig' in data) || data.posConfig is map) &&
         (!('paymentGateways' in data) || data.paymentGateways is list) &&
+        (!('layoutConfig' in data) || data.layoutConfig is map) &&
+        (!('catalogTaxonomy' in data) || (data.catalogTaxonomy is list && data.catalogTaxonomy.size() <= 100)) &&
+        (!('offers' in data) || (data.offers is list && data.offers.size() <= 100)) &&
         data.createdAt is string && data.createdAt.size() <= 40 &&
         (!('updatedAt' in data) || (data.updatedAt is string && data.updatedAt.size() <= 40));
     }
 
     function isValidEmployee(data) {
       return data.keys().hasAll(['id', 'ownerId', 'name', 'role', 'pinCode', 'branchId', 'createdAt']) &&
-        data.keys().hasOnly(['id', 'ownerId', 'name', 'role', 'pinCode', 'branchId', 'grossSalary', 'email', 'active', 'createdAt']) &&
+        data.keys().hasOnly([
+          'id', 'ownerId', 'name', 'role', 'pinCode', 'branchId', 'grossSalary', 'email', 'active',
+          'clockedIn', 'lastClockInAt', 'lastClockOutAt', 'tipsEarned', 'ratingAvg', 'ratingCount', 'ordersHandled',
+          'createdAt'
+        ]) &&
         isValidId(data.id) &&
         isValidId(data.ownerId) &&
         data.name is string && data.name.size() >= 1 && data.name.size() <= 100 &&
@@ -103,12 +111,23 @@ service cloud.firestore {
         (!('grossSalary' in data) || (data.grossSalary is number && data.grossSalary >= 0)) &&
         (!('email' in data) || (data.email is string && data.email.size() <= 160)) &&
         (!('active' in data) || data.active is bool) &&
+        (!('clockedIn' in data) || data.clockedIn is bool) &&
+        (!('lastClockInAt' in data) || (data.lastClockInAt is string && data.lastClockInAt.size() <= 40)) &&
+        (!('lastClockOutAt' in data) || (data.lastClockOutAt is string && data.lastClockOutAt.size() <= 40)) &&
+        (!('tipsEarned' in data) || (data.tipsEarned is number && data.tipsEarned >= 0)) &&
+        (!('ratingAvg' in data) || (data.ratingAvg is number && data.ratingAvg >= 0 && data.ratingAvg <= 5)) &&
+        (!('ratingCount' in data) || (data.ratingCount is number && data.ratingCount >= 0)) &&
+        (!('ordersHandled' in data) || (data.ordersHandled is number && data.ordersHandled >= 0)) &&
         data.createdAt is string && data.createdAt.size() <= 40;
     }
 
     function isValidProduct(data) {
       return data.keys().hasAll(['id', 'ownerId', 'sku', 'name', 'price', 'taxCode']) &&
-        data.keys().hasOnly(['id', 'ownerId', 'businessId', 'sku', 'barcode', 'name', 'category', 'price', 'cost', 'taxCode', 'unit', 'reorderPoint', 'imageUrl', 'variants', 'stockByStore']) &&
+        data.keys().hasOnly([
+          'id', 'ownerId', 'businessId', 'sku', 'barcode', 'name', 'category', 'subCategory',
+          'zoneId', 'slotId', 'shelfCode', 'price', 'cost', 'taxCode', 'unit', 'reorderPoint',
+          'imageUrl', 'variants', 'stockByStore'
+        ]) &&
         isValidId(data.id) &&
         isValidId(data.ownerId) &&
         data.sku is string && data.sku.size() >= 1 && data.sku.size() <= 60 &&
@@ -118,6 +137,10 @@ service cloud.firestore {
         (!('businessId' in data) || (data.businessId is string && data.businessId.size() <= 128)) &&
         (!('barcode' in data) || (data.barcode is string && data.barcode.size() <= 60)) &&
         (!('category' in data) || (data.category is string && data.category.size() <= 60)) &&
+        (!('subCategory' in data) || (data.subCategory is string && data.subCategory.size() <= 60)) &&
+        (!('zoneId' in data) || (data.zoneId is string && data.zoneId.size() <= 128)) &&
+        (!('slotId' in data) || (data.slotId is string && data.slotId.size() <= 128)) &&
+        (!('shelfCode' in data) || (data.shelfCode is string && data.shelfCode.size() <= 60)) &&
         (!('cost' in data) || (data.cost is number && data.cost >= 0)) &&
         (!('unit' in data) || (data.unit is string && data.unit.size() <= 30)) &&
         (!('reorderPoint' in data) || data.reorderPoint is number) &&
@@ -132,7 +155,8 @@ service cloud.firestore {
           'id', 'ownerId', 'receiptNo', 'businessId', 'storeId', 'storeName', 'cashierRole',
           'cashierName', 'customerName', 'customerPin', 'customerPhone', 'customerEmail',
           'channel', 'paymentMethod', 'paymentRef', 'currency', 'subtotal', 'taxAmount',
-          'discountTotal', 'total', 'amountTendered', 'changeDue', 'etimsCuin', 'etimsStatus',
+          'discountTotal', 'offerName', 'offerDiscount', 'tipAmount', 'tableOrSlotLabel',
+          'staffRating', 'total', 'amountTendered', 'changeDue', 'etimsCuin', 'etimsStatus',
           'etimsQrData', 'lines', 'createdAt', 'syncedAt', 'encryptedOffline', 'emailedTo'
         ]) &&
         isValidId(data.id) &&
@@ -143,6 +167,9 @@ service cloud.firestore {
         data.etimsCuin is string && data.etimsCuin.size() >= 1 && data.etimsCuin.size() <= 80 &&
         data.etimsStatus in ['Transmitted', 'Queued Offline', 'Pending Retry', 'Credit Note'] &&
         data.createdAt is string && data.createdAt.size() <= 40 &&
+        (!('tipAmount' in data) || (data.tipAmount is number && data.tipAmount >= 0)) &&
+        (!('offerDiscount' in data) || (data.offerDiscount is number && data.offerDiscount >= 0)) &&
+        (!('staffRating' in data) || (data.staffRating is number && data.staffRating >= 1 && data.staffRating <= 5)) &&
         (!('lines' in data) || (data.lines is list && data.lines.size() <= 200));
     }
 
@@ -221,7 +248,7 @@ service cloud.firestore {
         incoming().createdAt == existing().createdAt &&
         (
           isAdmin() ||
-          (existing().ownerId == request.auth.uid && incoming().diff(existing()).affectedKeys().hasOnly(['name', 'taxPin', 'vatRate', 'etimsEnabled', 'etimsMode', 'paybillOrTill', 'installedModuleIds', 'posConfig', 'paymentGateways', 'updatedAt']))
+          (existing().ownerId == request.auth.uid && incoming().diff(existing()).affectedKeys().hasOnly(['name', 'taxPin', 'vatRate', 'etimsEnabled', 'etimsMode', 'paybillOrTill', 'installedModuleIds', 'posConfig', 'paymentGateways', 'layoutConfig', 'catalogTaxonomy', 'offers', 'updatedAt']))
         );
       allow delete: if isAdmin() && isValidId(businessId);
 
@@ -239,7 +266,7 @@ service cloud.firestore {
           isValidEmployee(incoming()) &&
           incoming().ownerId == existing().ownerId &&
           incoming().createdAt == existing().createdAt &&
-          (isAdmin() || (existing().ownerId == request.auth.uid && incoming().diff(existing()).affectedKeys().hasOnly(['name', 'role', 'pinCode', 'branchId', 'grossSalary', 'email', 'active'])));
+          (isAdmin() || (existing().ownerId == request.auth.uid && incoming().diff(existing()).affectedKeys().hasOnly(['name', 'role', 'pinCode', 'branchId', 'grossSalary', 'email', 'active', 'clockedIn', 'lastClockInAt', 'lastClockOutAt', 'tipsEarned', 'ratingAvg', 'ratingCount', 'ordersHandled'])));
         allow delete: if isVerifiedUser() && isValidId(employeeId) && (existing().ownerId == request.auth.uid || isAdmin());
       }
 
@@ -256,7 +283,7 @@ service cloud.firestore {
           isValidId(productId) &&
           isValidProduct(incoming()) &&
           incoming().ownerId == existing().ownerId &&
-          (isAdmin() || (existing().ownerId == request.auth.uid && incoming().diff(existing()).affectedKeys().hasOnly(['name', 'price', 'cost', 'taxCode', 'category', 'reorderPoint', 'stockByStore', 'variants'])));
+          (isAdmin() || (existing().ownerId == request.auth.uid && incoming().diff(existing()).affectedKeys().hasOnly(['name', 'price', 'cost', 'taxCode', 'category', 'subCategory', 'zoneId', 'slotId', 'shelfCode', 'reorderPoint', 'stockByStore', 'variants'])));
         allow delete: if isVerifiedUser() && isValidId(productId) && (existing().ownerId == request.auth.uid || isAdmin());
       }
 

@@ -18,6 +18,7 @@ import { PrimaryWorkspaceTab, TopBar } from './components/TopBar';
 import { WorkspaceToolbar } from './components/WorkspaceToolbar';
 import { APP_MODULES } from './data/modulesRegistry';
 import {
+  SEED_ATTENDANCE_LOGS,
   SEED_AUDIT_LOGS,
   SEED_AUTOMATIONS,
   SEED_BUSINESSES,
@@ -49,6 +50,8 @@ import {
   AppModuleMeta,
   AuditLogEntry,
   BusinessEntity,
+  BusinessLayoutConfig,
+  CategoryGroup,
   EmployeePermissionSet,
   EmployeeRecord,
   ErpRecord,
@@ -56,7 +59,10 @@ import {
   PaymentMethod,
   PosCustomizationConfig,
   ProductItem,
+  PromoOffer,
   SaleTransaction,
+  ShiftAttendanceLog,
+  SlotStatus,
   StoreBranch,
   StudioField,
   StudioModel,
@@ -128,7 +134,12 @@ interface QueuedOfflineCheckout {
   paymentMethod: PaymentMethod;
   paymentRef: string;
   amountTendered: number;
-  channel: 'POS' | 'Field Agent';
+  offerName?: string;
+  offerDiscount?: number;
+  tipAmount?: number;
+  slotId?: string;
+  tableOrSlotLabel?: string;
+  channel: 'POS' | 'Field Agent' | 'Restaurant';
   lines: Array<{ productId: string; qty: number; discountPct: number }>;
   createdAt: string;
 }
@@ -178,6 +189,7 @@ function MisafaWorkspaceApp() {
   const [automations, setAutomations] = useState<WorkflowAutomation[]>(SEED_AUTOMATIONS);
   const [auditLogs, setAuditLogs] = useState<AuditLogEntry[]>(SEED_AUDIT_LOGS);
   const [erpRecords, setErpRecords] = useState<ErpRecord[]>(SEED_ERP_RECORDS);
+  const [attendanceLogs, setAttendanceLogs] = useState<ShiftAttendanceLog[]>(SEED_ATTENDANCE_LOGS);
 
   const [activeBusinessId, setActiveBusinessId] = useState<string>(initialMatchedBiz.id);
   const [activeStoreId, setActiveStoreId] = useState<string>(initialMatchedStore.id);
@@ -276,6 +288,7 @@ function MisafaWorkspaceApp() {
           setAutomations(data.automations);
           setAuditLogs(data.auditLogs);
           setErpRecords(data.erpRecords);
+          if (Array.isArray(data.attendanceLogs)) setAttendanceLogs(data.attendanceLogs);
 
           if (initialEntry.bizSlug) {
             const matchedBiz = (data.businesses as BusinessEntity[]).find(
@@ -457,6 +470,9 @@ function MisafaWorkspaceApp() {
             installedModuleIds: biz.installedModuleIds,
             posConfig: biz.posConfig,
             paymentGateways: biz.paymentGateways,
+            layoutConfig: biz.layoutConfig,
+            catalogTaxonomy: biz.catalogTaxonomy,
+            offers: biz.offers,
             createdAt: biz.createdAt,
             updatedAt: new Date().toISOString(),
           }),
@@ -532,7 +548,12 @@ function MisafaWorkspaceApp() {
     paymentMethod: PaymentMethod;
     paymentRef: string;
     amountTendered: number;
-    channel: 'POS' | 'Field Agent';
+    offerName?: string;
+    offerDiscount?: number;
+    tipAmount?: number;
+    slotId?: string;
+    tableOrSlotLabel?: string;
+    channel: 'POS' | 'Field Agent' | 'Restaurant';
   }): Promise<SaleTransaction | null> => {
     const requestPayload: QueuedOfflineCheckout = {
       id: `tx-off-${Date.now().toString(36)}`,
@@ -548,6 +569,11 @@ function MisafaWorkspaceApp() {
       paymentMethod: payload.paymentMethod,
       paymentRef: payload.paymentRef,
       amountTendered: payload.amountTendered,
+      offerName: payload.offerName,
+      offerDiscount: payload.offerDiscount,
+      tipAmount: payload.tipAmount,
+      slotId: payload.slotId,
+      tableOrSlotLabel: payload.tableOrSlotLabel,
       channel: payload.channel,
       lines: payload.lines,
       createdAt: new Date().toISOString(),
@@ -583,6 +609,11 @@ function MisafaWorkspaceApp() {
         });
       }
 
+      const offerDiscount = Math.max(0, Math.min(subtotal, Number(payload.offerDiscount) || 0));
+      const tipAmount = Math.max(0, Number(payload.tipAmount) || 0);
+      const discountedSubtotal = Math.max(0, Math.round((subtotal - offerDiscount) * 100) / 100);
+      const finalTotal = Math.round((discountedSubtotal + tipAmount) * 100) / 100;
+
       setProducts((prev) =>
         prev.map((p) => {
           const sold = payload.lines.find((l) => l.productId === p.id);
@@ -596,6 +627,51 @@ function MisafaWorkspaceApp() {
           };
         })
       );
+
+      if (activeEmployee) {
+        setEmployees((prev) =>
+          prev.map((e) =>
+            e.id === activeEmployee.id
+              ? {
+                  ...e,
+                  ordersHandled: (e.ordersHandled ?? 0) + 1,
+                  tipsEarned: Math.round(((e.tipsEarned ?? 0) + tipAmount) * 100) / 100,
+                }
+              : e
+          )
+        );
+      }
+
+      if (payload.slotId && activeBusiness.layoutConfig?.autoMarkTableNeedsClearing) {
+        setBusinesses((prev) =>
+          prev.map((b) => {
+            if (b.id !== activeBusiness.id || !b.layoutConfig) return b;
+            return {
+              ...b,
+              layoutConfig: {
+                ...b.layoutConfig,
+                zones: b.layoutConfig.zones.map((z) =>
+                  z.kind !== 'floor'
+                    ? z
+                    : {
+                        ...z,
+                        slots: z.slots.map((s) =>
+                          s.id === payload.slotId
+                            ? {
+                                ...s,
+                                status: 'needs_clearing',
+                                activeOrderTotal: undefined,
+                                lastUpdatedAt: new Date().toISOString(),
+                              }
+                            : s
+                        ),
+                      }
+                ),
+              },
+            };
+          })
+        );
+      }
 
       const offlineTx: SaleTransaction = {
         id: requestPayload.id,
@@ -613,12 +689,16 @@ function MisafaWorkspaceApp() {
         paymentMethod: payload.paymentMethod,
         paymentRef: payload.paymentRef,
         currency: activeBusiness.currency,
-        subtotal: Math.round(subtotal * 100) / 100,
+        subtotal: discountedSubtotal,
         taxAmount: Math.round(taxAmount * 100) / 100,
-        discountTotal: 0,
-        total: Math.round(subtotal * 100) / 100,
-        amountTendered: payload.amountTendered,
-        changeDue: Math.max(0, Math.round((payload.amountTendered - subtotal) * 100) / 100),
+        discountTotal: Math.round(offerDiscount * 100) / 100,
+        offerName: payload.offerName,
+        offerDiscount: offerDiscount > 0 ? offerDiscount : undefined,
+        tipAmount: tipAmount > 0 ? tipAmount : undefined,
+        tableOrSlotLabel: payload.tableOrSlotLabel,
+        total: finalTotal,
+        amountTendered: Math.max(finalTotal, payload.amountTendered),
+        changeDue: Math.max(0, Math.round((payload.amountTendered - finalTotal) * 100) / 100),
         etimsCuin: 'PENDING-OFFLINE-SYNC',
         etimsStatus: 'Queued Offline',
         etimsQrData: 'https://etims.kra.go.ke/verify?status=queued',
@@ -648,6 +728,16 @@ function MisafaWorkspaceApp() {
     setTransactions((prev) => [data.transaction, ...prev]);
     setProducts(data.products);
     setAuditLogs(data.auditLogs);
+    if (Array.isArray(data.businesses)) setBusinesses(data.businesses);
+    if (Array.isArray(data.employees)) {
+      setEmployees(data.employees);
+      if (activeEmployee) {
+        const refreshed = (data.employees as EmployeeRecord[]).find(
+          (e) => e.id === activeEmployee.id
+        );
+        if (refreshed) setActiveEmployee(refreshed);
+      }
+    }
     if (Array.isArray(data.erpRecords)) setErpRecords(data.erpRecords);
 
     // Sync transaction to Firestore if user is signed in & owns the business
@@ -677,6 +767,11 @@ function MisafaWorkspaceApp() {
             subtotal: tx.subtotal,
             taxAmount: tx.taxAmount,
             discountTotal: tx.discountTotal,
+            offerName: tx.offerName,
+            offerDiscount: tx.offerDiscount,
+            tipAmount: tx.tipAmount,
+            tableOrSlotLabel: tx.tableOrSlotLabel,
+            staffRating: tx.staffRating,
             total: tx.total,
             amountTendered: tx.amountTendered,
             changeDue: tx.changeDue,
@@ -747,6 +842,188 @@ function MisafaWorkspaceApp() {
 
   const handleUpdateGateways = async (paymentGateways: PaymentGatewayConfig[]) => {
     await updateBusinessConfig({ paymentGateways });
+  };
+
+  const handleUpdateLayoutConfig = async (layoutConfig: BusinessLayoutConfig) => {
+    await updateBusinessConfig({ layoutConfig });
+  };
+
+  const handleUpdateTaxonomy = async (catalogTaxonomy: CategoryGroup[]) => {
+    await updateBusinessConfig({ catalogTaxonomy });
+  };
+
+  const handleUpdateOffers = async (offers: PromoOffer[]) => {
+    await updateBusinessConfig({ offers });
+  };
+
+  const handleSlotStatusChange = async (
+    zoneId: string,
+    slotId: string,
+    status: SlotStatus
+  ) => {
+    if (isOffline) {
+      setBusinesses((prev) =>
+        prev.map((b) => {
+          if (b.id !== activeBusiness.id || !b.layoutConfig) return b;
+          return {
+            ...b,
+            layoutConfig: {
+              ...b.layoutConfig,
+              zones: b.layoutConfig.zones.map((z) =>
+                z.id !== zoneId
+                  ? z
+                  : {
+                      ...z,
+                      slots: z.slots.map((s) =>
+                        s.id === slotId
+                          ? {
+                              ...s,
+                              status,
+                              activeOrderTotal: status === 'available' ? undefined : s.activeOrderTotal,
+                              assignedEmployeeName:
+                                status === 'available' ? undefined : s.assignedEmployeeName,
+                              lastUpdatedAt: new Date().toISOString(),
+                            }
+                          : s
+                      ),
+                    }
+              ),
+            },
+          };
+        })
+      );
+      return;
+    }
+
+    const res = await fetch(`/api/businesses/${activeBusiness.id}/slot-status`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        zoneId,
+        slotId,
+        status,
+        actor: activeEmployee?.name || 'Staff',
+      }),
+    });
+    if (res.ok) {
+      const data = await res.json();
+      setBusinesses((prev) =>
+        prev.map((b) => (b.id === activeBusiness.id ? data.business : b))
+      );
+      await syncBusinessDocToCloud(data.business);
+    }
+  };
+
+  const handleEmployeeAttendance = async (
+    employeeId: string,
+    action: 'clock_in' | 'clock_out',
+    note?: string
+  ) => {
+    const targetEmp = employees.find((e) => e.id === employeeId);
+    if (isOffline && targetEmp) {
+      const now = new Date().toISOString();
+      const updatedEmp: EmployeeRecord = {
+        ...targetEmp,
+        clockedIn: action === 'clock_in',
+        lastClockInAt: action === 'clock_in' ? now : targetEmp.lastClockInAt,
+        lastClockOutAt: action === 'clock_out' ? now : targetEmp.lastClockOutAt,
+      };
+      setEmployees((prev) => prev.map((e) => (e.id === employeeId ? updatedEmp : e)));
+      if (activeEmployee?.id === employeeId) setActiveEmployee(updatedEmp);
+      setAttendanceLogs((prev) => [
+        {
+          id: `att-off-${Date.now().toString(36)}`,
+          businessId: activeBusiness.id,
+          employeeId: targetEmp.id,
+          employeeName: targetEmp.name,
+          role: targetEmp.role,
+          branchId: targetEmp.branchId,
+          action,
+          timestamp: now,
+          note: note || (action === 'clock_in' ? 'Offline Clock-In' : 'Offline Clock-Out'),
+        },
+        ...prev,
+      ]);
+      return;
+    }
+
+    const res = await fetch('/api/employees/attendance', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        businessId: activeBusiness.id,
+        employeeId,
+        action,
+        note,
+      }),
+    });
+    if (res.ok) {
+      const data = await res.json();
+      if (data.employee) {
+        setEmployees((prev) =>
+          prev.map((e) => (e.id === data.employee.id ? data.employee : e))
+        );
+        if (activeEmployee?.id === data.employee.id) {
+          setActiveEmployee(data.employee);
+        }
+      }
+      if (Array.isArray(data.attendanceLogs)) {
+        setAttendanceLogs(data.attendanceLogs);
+      }
+    }
+  };
+
+  const handleRateEmployee = async (
+    employeeName: string,
+    transactionId: string,
+    rating: number
+  ) => {
+    if (isOffline) {
+      setTransactions((prev) =>
+        prev.map((t) => (t.id === transactionId ? { ...t, staffRating: rating } : t))
+      );
+      setEmployees((prev) =>
+        prev.map((e) => {
+          if (e.name.toLowerCase() !== employeeName.toLowerCase()) return e;
+          const prevCount = e.ratingCount ?? 0;
+          const prevAvg = e.ratingAvg ?? 5;
+          const nextCount = prevCount + 1;
+          return {
+            ...e,
+            ratingAvg: Math.round(((prevAvg * prevCount + rating) / nextCount) * 100) / 100,
+            ratingCount: nextCount,
+          };
+        })
+      );
+      return;
+    }
+
+    const res = await fetch('/api/employees/rate', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        businessId: activeBusiness.id,
+        employeeName,
+        transactionId,
+        rating,
+      }),
+    });
+    if (res.ok) {
+      const data = await res.json();
+      if (data.employee) {
+        setEmployees((prev) =>
+          prev.map((e) => (e.id === data.employee.id ? data.employee : e))
+        );
+        if (activeEmployee?.id === data.employee.id) {
+          setActiveEmployee(data.employee);
+        }
+      }
+      if (data.transaction) {
+        setTransactions((prev) =>
+          prev.map((t) => (t.id === data.transaction.id ? data.transaction : t))
+        );
+      }
+    }
   };
 
   const handleLaunchModule = (mod: AppModuleMeta) => {
@@ -903,6 +1180,10 @@ function MisafaWorkspaceApp() {
     name: string;
     sku: string;
     category: string;
+    subCategory?: string;
+    zoneId?: string;
+    slotId?: string;
+    shelfCode?: string;
     price: number;
     cost: number;
     initialQty: number;
@@ -1088,6 +1369,9 @@ function MisafaWorkspaceApp() {
           }
           return matched;
         }}
+        onEmployeeAttendance={handleEmployeeAttendance}
+        onRateEmployee={handleRateEmployee}
+        onSlotStatusChange={handleSlotStatusChange}
         activeRole={activeRole}
         isOffline={isOffline}
         canExitToAdmin={!initialPosShortcut && accountTier === 'admin' && !posKioskMode}
@@ -1208,7 +1492,14 @@ function MisafaWorkspaceApp() {
               stores={businessStores}
               activeStore={activeStore}
               transactions={businessTransactions}
+              employees={businessEmployees}
+              attendanceLogs={attendanceLogs}
               onUpdatePosConfig={handleUpdatePosConfig}
+              onUpdateLayoutConfig={handleUpdateLayoutConfig}
+              onUpdateTaxonomy={handleUpdateTaxonomy}
+              onUpdateOffers={handleUpdateOffers}
+              onSlotStatusChange={handleSlotStatusChange}
+              onEmployeeAttendance={handleEmployeeAttendance}
               onLaunchPosRegister={() => {
                 setSelectedModule(null);
                 setTopTab('pos');
@@ -1246,12 +1537,15 @@ function MisafaWorkspaceApp() {
               activeStore={activeStore}
               products={businessProducts}
               employees={businessEmployees}
+              attendanceLogs={attendanceLogs}
               records={erpRecords}
               accountTier={accountTier}
               activeRole={activeRole}
               onCreateProduct={handleCreateProduct}
               onTransferStock={handleTransferStock}
               onCreateEmployee={handleCreateEmployee}
+              onEmployeeAttendance={handleEmployeeAttendance}
+              onSlotStatusChange={handleSlotStatusChange}
               onReceivePurchaseOrder={handleReceivePurchaseOrder}
               onCreateRecord={handleCreateErpRecord}
             />
