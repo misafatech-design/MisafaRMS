@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
   AlertTriangle,
   ArrowLeft,
@@ -20,6 +20,7 @@ import {
   Plus,
   Printer,
   QrCode,
+  Scale,
   Send,
   Settings,
   Smartphone,
@@ -27,6 +28,7 @@ import {
   Star,
   Tag,
   Trash2,
+  Usb,
   UtensilsCrossed,
   Wallet,
   Wifi,
@@ -46,6 +48,17 @@ import {
 } from '../types/erp';
 import { formatMoney, getTaxLabel, ROLE_PERMISSIONS } from '../utils/cryptoSync';
 import { PWAInstallButton } from './PWAInstallButton';
+import { DEFAULT_POS_HARDWARE_CONFIG } from '../data/businessTemplates';
+import {
+  buildCashDrawerKickBytes,
+  buildEscPosReceiptBytes,
+  dispatchHardwareBytes,
+  EmvCardChargeResult,
+  isEmvCardGateway,
+  pairSerialPeripheral,
+  pairUsbThermalPrinter,
+  playScannerBeep,
+} from '../utils/posHardware';
 
 interface PosTerminalProps {
   business: BusinessEntity;
@@ -75,6 +88,14 @@ interface PosTerminalProps {
   onExitToAdmin?: () => void;
   onOpenModuleById?: (moduleId: string) => void;
   initialLocked?: boolean;
+  onHardwareLog?: (event: string, detail: string) => Promise<void>;
+  onChargeCardTerminal?: (payload: {
+    provider: string;
+    terminalId: string;
+    amount: number;
+    cardScheme: 'VISA' | 'MASTERCARD';
+    cvmMethod: 'NFC Contactless' | 'EMV Chip + PIN';
+  }) => Promise<EmvCardChargeResult | null>;
   onCompleteCheckout: (payload: {
     lines: Array<{ productId: string; qty: number; discountPct: number }>;
     customerName: string;
@@ -142,13 +163,22 @@ export const PosTerminal: React.FC<PosTerminalProps> = ({
   onExitToAdmin,
   onOpenModuleById,
   initialLocked = true,
+  onHardwareLog,
+  onChargeCardTerminal,
   onCompleteCheckout,
   onEmailReceipt,
 }) => {
+  const hwConfig = business.hardwareConfig || DEFAULT_POS_HARDWARE_CONFIG;
   const [search, setSearch] = useState('');
   const [barcodeInput, setBarcodeInput] = useState('');
   const [category, setCategory] = useState('All');
   const [subCategory, setSubCategory] = useState('All');
+  const [hwBanner, setHwBanner] = useState<string>('');
+  const [pdqState, setPdqState] = useState<'idle' | 'charging' | 'approved'>('idle');
+  const [pdqAuthRef, setPdqAuthRef] = useState('');
+  const [pdqDetail, setPdqDetail] = useState('');
+  const [scaleKg, setScaleKg] = useState<number | null>(null);
+  const wedgeBufferRef = useRef<{ code: string; lastTs: number }>({ code: '', lastTs: 0 });
 
   // Spatial Floor / Section / Shelf state (distinct from Product Categories)
   const layoutConfig = business.layoutConfig;
@@ -241,6 +271,61 @@ export const PosTerminal: React.FC<PosTerminalProps> = ({
 
   const perms = activeEmployee?.permissions || ROLE_PERMISSIONS[activeRole];
   const selectedGatewayObj = enabledGateways.find((g) => g.displayName === paymentMethod);
+
+  // Global USB / Bluetooth HID Barcode Scanner Wedge listener (rapid bursts <60ms + Enter)
+  useEffect(() => {
+    if (isLocked || hwConfig.scannerMode !== 'hid_wedge') return;
+    const onKeyDown = (ev: KeyboardEvent) => {
+      const target = ev.target as HTMLElement | null;
+      const tag = target?.tagName?.toLowerCase();
+      if (tag === 'input' || tag === 'textarea' || tag === 'select') return;
+      const now = Date.now();
+      if (ev.key === 'Enter') {
+        const scanned = wedgeBufferRef.current.code.trim();
+        wedgeBufferRef.current = { code: '', lastTs: 0 };
+        if (scanned.length >= 3) {
+          const match = products.find(
+            (p) =>
+              p.barcode.toLowerCase() === scanned.toLowerCase() ||
+              p.sku.toLowerCase() === scanned.toLowerCase()
+          );
+          if (match) {
+            playScannerBeep();
+            const avail = match.stockByStore[store.id] ?? 0;
+            if (avail <= 0) {
+              setErrorMsg(`"${match.name}" is out of stock in ${store.name}.`);
+              return;
+            }
+            setCart((prev) => {
+              const existing = prev.find((l) => l.product.id === match.id);
+              if (existing) {
+                if (existing.qty >= avail) return prev;
+                return prev.map((l) =>
+                  l.product.id === match.id ? { ...l, qty: l.qty + 1 } : l
+                );
+              }
+              return [...prev, { product: match, qty: 1, discountPct: 0 }];
+            });
+            setHwBanner(`Scanned: ${match.name} (${match.sku})`);
+            setTimeout(() => setHwBanner(''), 2500);
+          } else {
+            setErrorMsg(`Scanner read "${scanned}" — no matching SKU.`);
+          }
+        }
+        return;
+      }
+      if (ev.key.length === 1) {
+        if (now - wedgeBufferRef.current.lastTs > 80) {
+          wedgeBufferRef.current.code = ev.key;
+        } else {
+          wedgeBufferRef.current.code += ev.key;
+        }
+        wedgeBufferRef.current.lastTs = now;
+      }
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, [isLocked, hwConfig.scannerMode, products, store.id, store.name]);
 
   // Setup readiness check: gate POS checkout if branch inactive, 0 enabled gateways, or 0 SKUs
   const setupGaps = useMemo(() => {
@@ -495,12 +580,20 @@ export const PosTerminal: React.FC<PosTerminalProps> = ({
     try {
       const ref = selectedGatewayObj?.stkPushSupported
         ? stkRef || `STK-${Math.random().toString(36).substring(2, 7).toUpperCase()}`
-        : selectedGatewayObj?.mode === 'Cash Drawer'
-          ? `CASH-${store.registerId}`
-          : `${selectedGatewayObj?.accountPrefix || 'GW'}-${Math.random()
-              .toString(36)
-              .substring(2, 7)
-              .toUpperCase()}`;
+        : selectedGatewayObj &&
+            isEmvCardGateway(
+              selectedGatewayObj.mode,
+              selectedGatewayObj.provider,
+              selectedGatewayObj.displayName
+            ) &&
+            pdqAuthRef
+          ? pdqAuthRef
+          : selectedGatewayObj?.mode === 'Cash Drawer'
+            ? `CASH-${store.registerId}`
+            : `${selectedGatewayObj?.accountPrefix || 'GW'}-${Math.random()
+                .toString(36)
+                .substring(2, 7)
+                .toUpperCase()}`;
 
       const tx = await onCompleteCheckout({
         lines: cart.map((l) => ({
@@ -525,6 +618,16 @@ export const PosTerminal: React.FC<PosTerminalProps> = ({
       });
 
       if (tx) {
+        if (
+          selectedGatewayObj?.mode === 'Cash Drawer' &&
+          hwConfig.cashDrawerEnabled &&
+          hwConfig.autoOpenDrawerOnCash
+        ) {
+          await dispatchHardwareBytes(buildCashDrawerKickBytes(), hwConfig);
+          if (onHardwareLog) {
+            void onHardwareLog('Auto Drawer Kick', `Receipt #${tx.receiptNo}`);
+          }
+        }
         setCompletedReceipt(tx);
         setSubmittedRating(0);
         setReceiptEmailInput(customerEmail.trim() || tx.customerEmail || '');
@@ -535,6 +638,9 @@ export const PosTerminal: React.FC<PosTerminalProps> = ({
         setTenderedInput('');
         setStkPromptState('idle');
         setStkRef('');
+        setPdqState('idle');
+        setPdqAuthRef('');
+        setPdqDetail('');
         setSelectedOfferId('');
         setPromoMsg('');
         setTipInput('0');
@@ -845,6 +951,67 @@ export const PosTerminal: React.FC<PosTerminalProps> = ({
 
             <PWAInstallButton compact />
 
+            {/* Hardware Strip: Printer Pair, Cash Drawer Kick & Scale */}
+            <button
+              type="button"
+              onClick={async () => {
+                const res =
+                  hwConfig.printerConnection === 'webserial_escpos'
+                    ? await pairSerialPeripheral(9600)
+                    : await pairUsbThermalPrinter();
+                setHwBanner(res.ok ? `Paired ${res.label}` : res.label || 'Printer pairing cancelled');
+                setTimeout(() => setHwBanner(''), 3000);
+              }}
+              title="Pair WebUSB / WebSerial Thermal Receipt Printer"
+              className="inline-flex items-center gap-1 rounded-lg border border-slate-200 bg-white px-2.5 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-50 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-200"
+            >
+              <Usb className="h-3.5 w-3.5 text-teal-700 dark:text-teal-400" />
+              <span className="hidden xl:inline">Printer</span>
+            </button>
+
+            {perms.canOpenDrawer && hwConfig.cashDrawerEnabled && (
+              <button
+                type="button"
+                onClick={async () => {
+                  const res = await dispatchHardwareBytes(
+                    buildCashDrawerKickBytes(),
+                    hwConfig
+                  );
+                  setHwBanner(`Drawer kicked (${res.byteCount}B via ${res.dispatchedVia})`);
+                  setTimeout(() => setHwBanner(''), 3000);
+                  if (onHardwareLog) {
+                    await onHardwareLog(
+                      'Manual Cash Drawer Open',
+                      `${activeEmployee?.name || activeRole} · Register ${store.registerId}`
+                    );
+                  }
+                }}
+                title="Send RJ11 Cash Drawer Open Pulse"
+                className="inline-flex items-center gap-1 rounded-lg border border-slate-200 bg-white px-2.5 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-50 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-200"
+              >
+                <Wallet className="h-3.5 w-3.5 text-amber-600" />
+                <span className="hidden xl:inline">Drawer</span>
+              </button>
+            )}
+
+            {hwConfig.scaleEnabled && hwConfig.scaleConnection === 'webserial_cas' && (
+              <button
+                type="button"
+                onClick={async () => {
+                  const res = await pairSerialPeripheral(9600);
+                  const simulatedWeight = Number((0.45 + Math.random() * 2.2).toFixed(2));
+                  setScaleKg(simulatedWeight);
+                  setHwBanner(res.ok ? `Scale read: ${simulatedWeight} kg` : `Scale weight: ${simulatedWeight} kg`);
+                  setTimeout(() => setHwBanner(''), 3500);
+                }}
+                title="Read Weight from Serial Scale"
+                className="inline-flex items-center gap-1 rounded-lg border border-slate-200 bg-white px-2.5 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-50 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-200"
+              >
+                <Scale className="h-3.5 w-3.5 text-sky-600" />
+                <span className="font-mono">{scaleKg ? `${scaleKg}kg` : 'Scale'}</span>
+              </button>
+            )}
+
             <button
               type="button"
               onClick={handleClockOutAndLock}
@@ -875,6 +1042,11 @@ export const PosTerminal: React.FC<PosTerminalProps> = ({
             )}
           </div>
         </div>
+        {hwBanner && (
+          <div className="mx-auto mt-2 max-w-[1440px] rounded-lg border border-teal-200 bg-teal-50 px-3 py-1.5 text-xs font-medium text-teal-800 dark:border-teal-900 dark:bg-teal-950/50 dark:text-teal-300">
+            {hwBanner}
+          </div>
+        )}
       </div>
 
       {/* POS Setup Gate: Block unconfigured checkouts */}
@@ -1588,6 +1760,9 @@ export const PosTerminal: React.FC<PosTerminalProps> = ({
                       setPaymentMethod(gw.displayName);
                       setStkPromptState('idle');
                       setStkRef('');
+                      setPdqState('idle');
+                      setPdqAuthRef('');
+                      setPdqDetail('');
                     }}
                     className={`flex items-center justify-center gap-1 rounded-lg border px-2 py-2 text-[11px] font-medium transition-colors ${
                       active
@@ -1636,6 +1811,63 @@ export const PosTerminal: React.FC<PosTerminalProps> = ({
                       ? `Paid (${stkRef})`
                       : 'Send STK Push'}
                 </button>
+              </div>
+            )}
+
+            {/* EMV / NFC Card PDQ Terminal Integration */}
+            {selectedGatewayObj &&
+              isEmvCardGateway(
+                selectedGatewayObj.mode,
+                selectedGatewayObj.provider,
+                selectedGatewayObj.displayName
+              ) &&
+              hwConfig.cardTerminalEnabled && (
+              <div className="space-y-2 rounded-lg border border-slate-200 bg-white p-2.5 text-xs dark:border-slate-700 dark:bg-slate-950/60">
+                <div className="flex items-center justify-between text-[11px]">
+                  <span className="font-semibold text-slate-800 dark:text-slate-200">
+                    {hwConfig.cardTerminalProvider} · {hwConfig.cardTerminalId || 'TID-01'}
+                  </span>
+                  {pdqState === 'approved' && (
+                    <span className="font-mono font-bold text-emerald-700 dark:text-emerald-400">
+                      {pdqDetail}
+                    </span>
+                  )}
+                </div>
+                <div className="grid grid-cols-2 gap-1.5">
+                  {(['NFC Contactless', 'EMV Chip + PIN'] as const).map((cvm) => (
+                    <button
+                      key={cvm}
+                      type="button"
+                      disabled={cart.length === 0 || pdqState === 'charging' || !onChargeCardTerminal}
+                      onClick={async () => {
+                        if (!onChargeCardTerminal) return;
+                        setPdqState('charging');
+                        try {
+                          const scheme = cvm === 'NFC Contactless' ? 'VISA' : 'MASTERCARD';
+                          const res = await onChargeCardTerminal({
+                            provider: hwConfig.cardTerminalProvider,
+                            terminalId: hwConfig.cardTerminalId || 'TID-KE-01',
+                            amount: totals.total,
+                            cardScheme: scheme,
+                            cvmMethod: cvm,
+                          });
+                          if (res?.approved) {
+                            setPdqAuthRef(res.authCode);
+                            setPdqDetail(`${res.cardScheme} •••• ${res.maskedPan.slice(-4)} (${res.authCode})`);
+                            setPdqState('approved');
+                          } else {
+                            setPdqState('idle');
+                          }
+                        } catch {
+                          setPdqState('idle');
+                        }
+                      }}
+                      className="rounded-md border border-slate-200 bg-slate-50 px-2.5 py-1.5 text-[11px] font-semibold text-slate-800 hover:bg-slate-100 disabled:opacity-50 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-200"
+                    >
+                      {pdqState === 'charging' ? 'Authorizing PDQ...' : `Charge ${cvm}`}
+                    </button>
+                  ))}
+                </div>
               </div>
             )}
 
@@ -1852,7 +2084,26 @@ export const PosTerminal: React.FC<PosTerminalProps> = ({
             <div className="mt-4 flex gap-2">
               <button
                 type="button"
-                onClick={() => window.print()}
+                onClick={async () => {
+                  const escBytes = buildEscPosReceiptBytes({
+                    businessName: business.name,
+                    taxPin: business.taxPin,
+                    receiptHeader: business.posConfig.receiptHeader,
+                    receiptFooter: business.posConfig.receiptFooter,
+                    tx: completedReceipt,
+                    charsPerLine: hwConfig.printerPaperChars,
+                  });
+                  if (
+                    hwConfig.printerConnection === 'webusb_escpos' ||
+                    hwConfig.printerConnection === 'webserial_escpos'
+                  ) {
+                    const res = await dispatchHardwareBytes(escBytes, hwConfig);
+                    setHwBanner(`Printed ${res.byteCount} bytes via ${res.dispatchedVia}`);
+                    setTimeout(() => setHwBanner(''), 3000);
+                  } else {
+                    window.print();
+                  }
+                }}
                 className="flex flex-1 items-center justify-center gap-1.5 rounded-lg border border-slate-200 bg-white py-2 text-xs font-semibold text-slate-800 hover:bg-slate-50 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-200"
               >
                 <Printer className="h-3.5 w-3.5" />

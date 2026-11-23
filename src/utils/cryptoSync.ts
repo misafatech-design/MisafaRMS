@@ -144,6 +144,7 @@ export const ROLE_PERMISSIONS: Record<
   {
     maxDiscountPct: number;
     canVoidSale: boolean;
+    canOpenDrawer: boolean;
     canViewEtims: boolean;
     canEditInventory: boolean;
     canManageUsers: boolean;
@@ -155,6 +156,7 @@ export const ROLE_PERMISSIONS: Record<
   Owner: {
     maxDiscountPct: 100,
     canVoidSale: true,
+    canOpenDrawer: true,
     canViewEtims: true,
     canEditInventory: true,
     canManageUsers: true,
@@ -165,6 +167,7 @@ export const ROLE_PERMISSIONS: Record<
   'Store Manager': {
     maxDiscountPct: 25,
     canVoidSale: true,
+    canOpenDrawer: true,
     canViewEtims: true,
     canEditInventory: true,
     canManageUsers: false,
@@ -175,6 +178,7 @@ export const ROLE_PERMISSIONS: Record<
   Cashier: {
     maxDiscountPct: 5,
     canVoidSale: false,
+    canOpenDrawer: true,
     canViewEtims: false,
     canEditInventory: false,
     canManageUsers: false,
@@ -185,6 +189,7 @@ export const ROLE_PERMISSIONS: Record<
   'Inventory Clerk': {
     maxDiscountPct: 0,
     canVoidSale: false,
+    canOpenDrawer: false,
     canViewEtims: false,
     canEditInventory: true,
     canManageUsers: false,
@@ -195,6 +200,7 @@ export const ROLE_PERMISSIONS: Record<
   Accountant: {
     maxDiscountPct: 0,
     canVoidSale: false,
+    canOpenDrawer: false,
     canViewEtims: true,
     canEditInventory: false,
     canManageUsers: false,
@@ -202,9 +208,21 @@ export const ROLE_PERMISSIONS: Record<
     canApprovePo: true,
     canViewPayroll: true,
   },
+  'HR Officer': {
+    maxDiscountPct: 0,
+    canVoidSale: false,
+    canOpenDrawer: false,
+    canViewEtims: false,
+    canEditInventory: false,
+    canManageUsers: true,
+    canUseStudio: false,
+    canApprovePo: false,
+    canViewPayroll: true,
+  },
   'Field Agent': {
     maxDiscountPct: 10,
     canVoidSale: false,
+    canOpenDrawer: false,
     canViewEtims: false,
     canEditInventory: false,
     canManageUsers: false,

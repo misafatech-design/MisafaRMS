@@ -43,6 +43,8 @@ import {
   getTaxLabel,
   ROLE_PERMISSIONS,
 } from '../utils/cryptoSync';
+import { APP_MODULES } from '../data/modulesRegistry';
+import { getDefaultModulesForRole } from '../data/businessTemplates';
 
 interface ModuleWorkspaceProps {
   module: AppModuleMeta;
@@ -148,6 +150,7 @@ const DEFAULT_EMP_PERMS: Record<UserRole, EmployeePermissionSet> = {
     canViewEtims: true,
     canExportReports: true,
     canManagePayments: true,
+    allowedModuleIds: getDefaultModulesForRole('Owner'),
   },
   'Store Manager': {
     maxDiscountPct: 25,
@@ -158,6 +161,7 @@ const DEFAULT_EMP_PERMS: Record<UserRole, EmployeePermissionSet> = {
     canViewEtims: true,
     canExportReports: true,
     canManagePayments: false,
+    allowedModuleIds: getDefaultModulesForRole('Store Manager'),
   },
   Cashier: {
     maxDiscountPct: 5,
@@ -168,6 +172,7 @@ const DEFAULT_EMP_PERMS: Record<UserRole, EmployeePermissionSet> = {
     canViewEtims: false,
     canExportReports: false,
     canManagePayments: false,
+    allowedModuleIds: getDefaultModulesForRole('Cashier'),
   },
   'Inventory Clerk': {
     maxDiscountPct: 0,
@@ -178,6 +183,7 @@ const DEFAULT_EMP_PERMS: Record<UserRole, EmployeePermissionSet> = {
     canViewEtims: false,
     canExportReports: true,
     canManagePayments: false,
+    allowedModuleIds: getDefaultModulesForRole('Inventory Clerk'),
   },
   Accountant: {
     maxDiscountPct: 0,
@@ -188,6 +194,18 @@ const DEFAULT_EMP_PERMS: Record<UserRole, EmployeePermissionSet> = {
     canViewEtims: true,
     canExportReports: true,
     canManagePayments: false,
+    allowedModuleIds: getDefaultModulesForRole('Accountant'),
+  },
+  'HR Officer': {
+    maxDiscountPct: 0,
+    canVoidSale: false,
+    canOpenDrawer: false,
+    canViewCostPrice: false,
+    canEditInventory: false,
+    canViewEtims: false,
+    canExportReports: true,
+    canManagePayments: false,
+    allowedModuleIds: getDefaultModulesForRole('HR Officer'),
   },
   'Field Agent': {
     maxDiscountPct: 10,
@@ -198,6 +216,7 @@ const DEFAULT_EMP_PERMS: Record<UserRole, EmployeePermissionSet> = {
     canViewEtims: false,
     canExportReports: false,
     canManagePayments: false,
+    allowedModuleIds: getDefaultModulesForRole('Field Agent'),
   },
 };
 
@@ -1083,7 +1102,13 @@ export const ModuleWorkspace: React.FC<ModuleWorkspaceProps> = ({
                   }
                   const loggedHours = Math.round((totalMs / 3600000) * 10) / 10;
 
+                  const grantedAppsCount =
+                    emp.role === 'Owner'
+                      ? APP_MODULES.length
+                      : (emp.permissions.allowedModuleIds || getDefaultModulesForRole(emp.role)).length;
+
                   const capabilities = [
+                    `${grantedAppsCount} apps`,
                     emp.permissions.canVoidSale && 'Void Sale',
                     emp.permissions.canOpenDrawer && 'Cash Drawer',
                     emp.permissions.canViewCostPrice && 'View Cost',
@@ -1207,10 +1232,10 @@ export const ModuleWorkspace: React.FC<ModuleWorkspaceProps> = ({
         {/* Edit Employee Modal */}
         {editingEmp && (
           <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/60 p-4 backdrop-blur-xs">
-            <div className="w-full max-w-md rounded-xl border border-slate-200 bg-white p-6 shadow-xl dark:border-slate-800 dark:bg-slate-900">
+            <div className="max-h-[90vh] w-full max-w-2xl overflow-y-auto rounded-xl border border-slate-200 bg-white p-6 shadow-xl dark:border-slate-800 dark:bg-slate-900">
               <div className="flex items-center justify-between border-b border-slate-200 pb-3 dark:border-slate-800">
                 <h3 className="font-display text-sm font-bold text-slate-900 dark:text-slate-100">
-                  Edit Staff Member · {editingEmp.name}
+                  Edit Staff Member &amp; App Permissions · {editingEmp.name}
                 </h3>
                 <button
                   type="button"
@@ -1230,9 +1255,10 @@ export const ModuleWorkspace: React.FC<ModuleWorkspaceProps> = ({
                     grossSalary: editingEmp.grossSalary,
                     pinCode: editingEmp.pinCode,
                     active: editingEmp.active,
+                    permissions: editingEmp.permissions,
                   });
                   setEditingEmp(null);
-                  setEmpCreatedMsg(`Updated staff profile for ${editingEmp.name}.`);
+                  setEmpCreatedMsg(`Updated staff profile & app access for ${editingEmp.name}.`);
                   setTimeout(() => setEmpCreatedMsg(''), 3500);
                 }}
                 className="mt-4 space-y-3 text-xs"
@@ -1250,16 +1276,20 @@ export const ModuleWorkspace: React.FC<ModuleWorkspaceProps> = ({
                 <div className="grid grid-cols-2 gap-2">
                   <select
                     value={editingEmp.role}
-                    onChange={(e) =>
-                      setEditingEmp((p) => (p ? { ...p, role: e.target.value as UserRole } : p))
-                    }
+                    onChange={(e) => {
+                      const nextRole = e.target.value as UserRole;
+                      setEditingEmp((p) =>
+                        p ? { ...p, role: nextRole, permissions: { ...DEFAULT_EMP_PERMS[nextRole] } } : p
+                      );
+                    }}
                     className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-slate-900 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-100"
                   >
                     <option value="Owner">Owner</option>
                     <option value="Store Manager">Store Manager</option>
-                    <option value="Cashier">Cashier</option>
-                    <option value="Inventory Clerk">Inventory Clerk</option>
+                    <option value="HR Officer">HR Officer</option>
                     <option value="Accountant">Accountant</option>
+                    <option value="Inventory Clerk">Inventory Clerk</option>
+                    <option value="Cashier">Cashier</option>
                     <option value="Field Agent">Field Agent</option>
                   </select>
                   <select
@@ -1276,7 +1306,7 @@ export const ModuleWorkspace: React.FC<ModuleWorkspaceProps> = ({
                     ))}
                   </select>
                 </div>
-                <div className="grid grid-cols-2 gap-2">
+                <div className="grid grid-cols-3 gap-2">
                   <div>
                     <label className="text-[10px] text-slate-500">Gross Salary ({business.currency})</label>
                     <input
@@ -1305,7 +1335,174 @@ export const ModuleWorkspace: React.FC<ModuleWorkspaceProps> = ({
                       className="mt-0.5 w-full rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 font-mono text-slate-900 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-100"
                     />
                   </div>
+                  <div>
+                    <label className="text-[10px] text-slate-500">Max Discount %</label>
+                    <input
+                      type="number"
+                      min={0}
+                      max={100}
+                      value={editingEmp.permissions.maxDiscountPct}
+                      onChange={(e) =>
+                        setEditingEmp((p) =>
+                          p
+                            ? {
+                                ...p,
+                                permissions: {
+                                  ...p.permissions,
+                                  maxDiscountPct: Math.max(0, Math.min(100, Number(e.target.value) || 0)),
+                                },
+                              }
+                            : p
+                        )
+                      }
+                      className="mt-0.5 w-full rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 font-mono text-slate-900 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-100"
+                    />
+                  </div>
                 </div>
+
+                {/* Action Capability Toggles */}
+                <div className="flex flex-wrap gap-4 rounded-lg bg-slate-50 p-3 dark:bg-slate-800/60">
+                  {(
+                    [
+                      { key: 'canVoidSale', label: 'Void Sale' },
+                      { key: 'canOpenDrawer', label: 'Open Cash Drawer' },
+                      { key: 'canViewCostPrice', label: 'View Cost Price' },
+                      { key: 'canEditInventory', label: 'Edit Inventory' },
+                      { key: 'canViewEtims', label: 'Access eTIMS' },
+                      { key: 'canExportReports', label: 'Export Reports' },
+                    ] as const
+                  ).map((item) => (
+                    <label key={item.key} className="inline-flex items-center gap-1.5 text-slate-700 dark:text-slate-300">
+                      <input
+                        type="checkbox"
+                        checked={editingEmp.permissions[item.key]}
+                        onChange={(e) =>
+                          setEditingEmp((p) =>
+                            p
+                              ? {
+                                  ...p,
+                                  permissions: { ...p.permissions, [item.key]: e.target.checked },
+                                }
+                              : p
+                          )
+                        }
+                        className="rounded border-slate-300 text-teal-700"
+                      />
+                      <span>{item.label}</span>
+                    </label>
+                  ))}
+                </div>
+
+                {/* Granular App-Level Access Checklist */}
+                {editingEmp.role !== 'Owner' && (
+                  <div className="rounded-lg border border-slate-200 p-3 dark:border-slate-700">
+                    <div className="flex flex-wrap items-center justify-between gap-2 pb-2">
+                      <span className="font-semibold text-slate-800 dark:text-slate-200">
+                        Permitted Workspace Apps (
+                        {(
+                          editingEmp.permissions.allowedModuleIds ||
+                          getDefaultModulesForRole(editingEmp.role)
+                        ).length}{' '}
+                        selected)
+                      </span>
+                      <div className="flex gap-1.5">
+                        <button
+                          type="button"
+                          onClick={() =>
+                            setEditingEmp((p) =>
+                              p
+                                ? {
+                                    ...p,
+                                    permissions: {
+                                      ...p.permissions,
+                                      allowedModuleIds: getDefaultModulesForRole(p.role),
+                                    },
+                                  }
+                                : p
+                            )
+                          }
+                          className="rounded border border-slate-200 px-2 py-0.5 text-[11px] text-slate-600 hover:bg-slate-100 dark:border-slate-700 dark:text-slate-300"
+                        >
+                          Role Preset
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() =>
+                            setEditingEmp((p) =>
+                              p
+                                ? {
+                                    ...p,
+                                    permissions: {
+                                      ...p.permissions,
+                                      allowedModuleIds: APP_MODULES.filter((m) => !m.adminOnly).map(
+                                        (m) => m.id
+                                      ),
+                                    },
+                                  }
+                                : p
+                            )
+                          }
+                          className="rounded border border-slate-200 px-2 py-0.5 text-[11px] text-slate-600 hover:bg-slate-100 dark:border-slate-700 dark:text-slate-300"
+                        >
+                          Grant All
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() =>
+                            setEditingEmp((p) =>
+                              p
+                                ? {
+                                    ...p,
+                                    permissions: { ...p.permissions, allowedModuleIds: [] },
+                                  }
+                                : p
+                            )
+                          }
+                          className="rounded border border-slate-200 px-2 py-0.5 text-[11px] text-rose-600 hover:bg-rose-50 dark:border-slate-700"
+                        >
+                          Clear
+                        </button>
+                      </div>
+                    </div>
+                    <div className="grid max-h-44 grid-cols-2 gap-1.5 overflow-y-auto pt-1 sm:grid-cols-3">
+                      {APP_MODULES.filter((m) => !m.adminOnly).map((mod) => {
+                        const list =
+                          editingEmp.permissions.allowedModuleIds ||
+                          getDefaultModulesForRole(editingEmp.role);
+                        const checked = list.includes(mod.id);
+                        return (
+                          <label
+                            key={mod.id}
+                            className="flex cursor-pointer items-center gap-1.5 rounded border border-slate-100 px-2 py-1 text-[11px] hover:bg-slate-50 dark:border-slate-800 dark:hover:bg-slate-800/50"
+                          >
+                            <input
+                              type="checkbox"
+                              checked={checked}
+                              onChange={(e) => {
+                                const next = e.target.checked
+                                  ? Array.from(new Set([...list, mod.id]))
+                                  : list.filter((id) => id !== mod.id);
+                                setEditingEmp((p) =>
+                                  p
+                                    ? {
+                                        ...p,
+                                        permissions: { ...p.permissions, allowedModuleIds: next },
+                                      }
+                                    : p
+                                );
+                              }}
+                              className="rounded border-slate-300 text-teal-700"
+                            />
+                            <span className="truncate text-slate-700 dark:text-slate-300">
+                              {mod.name}
+                            </span>
+                          </label>
+                        );
+                      })}
+                    </div>
+                  </div>
+                )}
+
                 <label className="inline-flex items-center gap-2 text-slate-700 dark:text-slate-300">
                   <input
                     type="checkbox"
@@ -1418,8 +1615,9 @@ export const ModuleWorkspace: React.FC<ModuleWorkspaceProps> = ({
               >
                 <option value="Cashier">Cashier</option>
                 <option value="Store Manager">Store Manager</option>
-                <option value="Inventory Clerk">Inventory Clerk</option>
+                <option value="HR Officer">HR Officer</option>
                 <option value="Accountant">Accountant</option>
+                <option value="Inventory Clerk">Inventory Clerk</option>
                 <option value="Field Agent">Field Agent</option>
               </select>
 
@@ -1475,6 +1673,7 @@ export const ModuleWorkspace: React.FC<ModuleWorkspaceProps> = ({
               {(
                 [
                   { key: 'canVoidSale', label: 'Void Sale' },
+                  { key: 'canOpenDrawer', label: 'Cash Drawer' },
                   { key: 'canViewCostPrice', label: 'View Cost Price' },
                   { key: 'canEditInventory', label: 'Edit Inventory' },
                   { key: 'canViewEtims', label: 'Access eTIMS' },
@@ -1493,6 +1692,73 @@ export const ModuleWorkspace: React.FC<ModuleWorkspaceProps> = ({
                   <span>{item.label}</span>
                 </label>
               ))}
+            </div>
+
+            {/* App-Level Visibility & Launch Checklist */}
+            <div className="rounded-lg border border-slate-200 p-3 text-xs dark:border-slate-700">
+              <div className="flex flex-wrap items-center justify-between gap-2 pb-2">
+                <span className="font-semibold text-slate-800 dark:text-slate-200">
+                  Permitted Workspace Apps ({(empPerms.allowedModuleIds || []).length} selected for {empRole})
+                </span>
+                <div className="flex gap-1.5">
+                  <button
+                    type="button"
+                    onClick={() =>
+                      setEmpPerms((p) => ({
+                        ...p,
+                        allowedModuleIds: getDefaultModulesForRole(empRole),
+                      }))
+                    }
+                    className="rounded border border-slate-200 px-2 py-0.5 text-[11px] text-slate-600 hover:bg-slate-100 dark:border-slate-700 dark:text-slate-300"
+                  >
+                    Role Preset
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() =>
+                      setEmpPerms((p) => ({
+                        ...p,
+                        allowedModuleIds: APP_MODULES.filter((m) => !m.adminOnly).map((m) => m.id),
+                      }))
+                    }
+                    className="rounded border border-slate-200 px-2 py-0.5 text-[11px] text-slate-600 hover:bg-slate-100 dark:border-slate-700 dark:text-slate-300"
+                  >
+                    Grant All
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setEmpPerms((p) => ({ ...p, allowedModuleIds: [] }))}
+                    className="rounded border border-slate-200 px-2 py-0.5 text-[11px] text-rose-600 hover:bg-rose-50 dark:border-slate-700"
+                  >
+                    Clear
+                  </button>
+                </div>
+              </div>
+              <div className="grid max-h-40 grid-cols-2 gap-1.5 overflow-y-auto pt-1 sm:grid-cols-3 md:grid-cols-4">
+                {APP_MODULES.filter((m) => !m.adminOnly).map((mod) => {
+                  const list = empPerms.allowedModuleIds || [];
+                  const checked = list.includes(mod.id);
+                  return (
+                    <label
+                      key={mod.id}
+                      className="flex cursor-pointer items-center gap-1.5 rounded border border-slate-100 px-2 py-1 text-[11px] hover:bg-slate-50 dark:border-slate-800 dark:hover:bg-slate-800/50"
+                    >
+                      <input
+                        type="checkbox"
+                        checked={checked}
+                        onChange={(e) => {
+                          const next = e.target.checked
+                            ? Array.from(new Set([...list, mod.id]))
+                            : list.filter((id) => id !== mod.id);
+                          setEmpPerms((p) => ({ ...p, allowedModuleIds: next }));
+                        }}
+                        className="rounded border-slate-300 text-teal-700"
+                      />
+                      <span className="truncate text-slate-700 dark:text-slate-300">{mod.name}</span>
+                    </label>
+                  );
+                })}
+              </div>
             </div>
 
             <button

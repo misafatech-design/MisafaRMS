@@ -74,7 +74,8 @@ service cloud.firestore {
           'ecommerceEnabled', 'customDomain', 'domainVerified', 'dnsToken', 'storefrontTagline',
           'deliveryFee', 'freeDeliveryAbove', 'storefrontPickupEnabled',
           'installedModuleIds', 'posConfig', 'paymentGateways', 'layoutConfig',
-          'catalogTaxonomy', 'offers', 'createdAt', 'updatedAt'
+          'catalogTaxonomy', 'offers', 'templateId', 'supportAccess', 'hardwareConfig',
+          'createdAt', 'updatedAt'
         ]) &&
         isValidId(data.id) &&
         isValidId(data.ownerId) &&
@@ -109,6 +110,9 @@ service cloud.firestore {
         (!('layoutConfig' in data) || data.layoutConfig is map) &&
         (!('catalogTaxonomy' in data) || (data.catalogTaxonomy is list && data.catalogTaxonomy.size() <= 100)) &&
         (!('offers' in data) || (data.offers is list && data.offers.size() <= 100)) &&
+        (!('templateId' in data) || (data.templateId is string && data.templateId.size() <= 64)) &&
+        (!('supportAccess' in data) || data.supportAccess is map) &&
+        (!('hardwareConfig' in data) || data.hardwareConfig is map) &&
         data.createdAt is string && data.createdAt.size() <= 40 &&
         (!('updatedAt' in data) || (data.updatedAt is string && data.updatedAt.size() <= 40));
     }
@@ -183,12 +187,12 @@ service cloud.firestore {
         data.keys().hasOnly([
           'id', 'ownerId', 'name', 'role', 'pinCode', 'branchId', 'grossSalary', 'email', 'active',
           'clockedIn', 'lastClockInAt', 'lastClockOutAt', 'tipsEarned', 'ratingAvg', 'ratingCount', 'ordersHandled',
-          'createdAt'
+          'permissions', 'createdAt'
         ]) &&
         isValidId(data.id) &&
         isValidId(data.ownerId) &&
         data.name is string && data.name.size() >= 1 && data.name.size() <= 100 &&
-        data.role in ['Owner', 'Store Manager', 'Cashier', 'Inventory Clerk', 'Accountant', 'Field Agent'] &&
+        data.role in ['Owner', 'Store Manager', 'Cashier', 'Inventory Clerk', 'Accountant', 'HR Officer', 'Field Agent'] &&
         data.pinCode is string && data.pinCode.size() >= 4 && data.pinCode.size() <= 8 && data.pinCode.matches('^[0-9]{4,8}$') &&
         data.branchId is string && data.branchId.size() >= 1 && data.branchId.size() <= 128 &&
         (!('grossSalary' in data) || (data.grossSalary is number && data.grossSalary >= 0)) &&
@@ -201,6 +205,7 @@ service cloud.firestore {
         (!('ratingAvg' in data) || (data.ratingAvg is number && data.ratingAvg >= 0 && data.ratingAvg <= 5)) &&
         (!('ratingCount' in data) || (data.ratingCount is number && data.ratingCount >= 0)) &&
         (!('ordersHandled' in data) || (data.ordersHandled is number && data.ordersHandled >= 0)) &&
+        (!('permissions' in data) || data.permissions is map) &&
         data.createdAt is string && data.createdAt.size() <= 40;
     }
 
@@ -445,7 +450,7 @@ service cloud.firestore {
         incoming().createdAt == existing().createdAt &&
         (
           isAdmin() ||
-          (existing().ownerId == request.auth.uid && incoming().diff(existing()).affectedKeys().hasOnly(['name', 'taxPin', 'vatRate', 'etimsEnabled', 'etimsMode', 'paybillOrTill', 'ecommerceEnabled', 'customDomain', 'domainVerified', 'dnsToken', 'storefrontTagline', 'deliveryFee', 'freeDeliveryAbove', 'storefrontPickupEnabled', 'installedModuleIds', 'posConfig', 'paymentGateways', 'layoutConfig', 'catalogTaxonomy', 'offers', 'updatedAt']))
+          (existing().ownerId == request.auth.uid && incoming().diff(existing()).affectedKeys().hasOnly(['name', 'taxPin', 'vatRate', 'etimsEnabled', 'etimsMode', 'paybillOrTill', 'ecommerceEnabled', 'customDomain', 'domainVerified', 'dnsToken', 'storefrontTagline', 'deliveryFee', 'freeDeliveryAbove', 'storefrontPickupEnabled', 'installedModuleIds', 'posConfig', 'paymentGateways', 'layoutConfig', 'catalogTaxonomy', 'offers', 'templateId', 'supportAccess', 'hardwareConfig', 'updatedAt']))
         );
       allow delete: if isAdmin() && isValidId(businessId);
 
@@ -463,7 +468,7 @@ service cloud.firestore {
           isValidEmployee(incoming()) &&
           incoming().ownerId == existing().ownerId &&
           incoming().createdAt == existing().createdAt &&
-          (isAdmin() || (existing().ownerId == request.auth.uid && incoming().diff(existing()).affectedKeys().hasOnly(['name', 'role', 'pinCode', 'branchId', 'grossSalary', 'email', 'active', 'clockedIn', 'lastClockInAt', 'lastClockOutAt', 'tipsEarned', 'ratingAvg', 'ratingCount', 'ordersHandled'])));
+          (isAdmin() || (existing().ownerId == request.auth.uid && incoming().diff(existing()).affectedKeys().hasOnly(['name', 'role', 'pinCode', 'branchId', 'grossSalary', 'email', 'active', 'clockedIn', 'lastClockInAt', 'lastClockOutAt', 'tipsEarned', 'ratingAvg', 'ratingCount', 'ordersHandled', 'permissions'])));
         allow delete: if isVerifiedUser() && isValidId(employeeId) && (existing().ownerId == request.auth.uid || isAdmin());
       }
 

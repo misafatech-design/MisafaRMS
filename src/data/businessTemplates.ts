@@ -1,0 +1,761 @@
+import {
+  BusinessLayoutConfig,
+  CategoryGroup,
+  PosHardwareConfig,
+  PromoOffer,
+  TaxCode,
+  UserRole,
+} from '../types/erp';
+import { APP_MODULES } from './modulesRegistry';
+
+export const DEFAULT_POS_HARDWARE_CONFIG: PosHardwareConfig = {
+  printerEnabled: true,
+  printerConnection: 'browser_print',
+  printerModel: 'Epson TM-T88VI / 80mm ESC-POS',
+  printerPaperChars: 42,
+  cashDrawerEnabled: true,
+  cashDrawerTrigger: 'printer_rj11',
+  autoOpenDrawerOnCash: true,
+  barcodeScannerEnabled: true,
+  scannerMode: 'hid_wedge',
+  cardTerminalEnabled: true,
+  cardTerminalProvider: 'pesapal_sabi',
+  cardTerminalConnection: 'cloud_push',
+  cardTerminalId: 'PDQ-NBO-01',
+  scaleEnabled: false,
+  scaleConnection: 'none',
+};
+
+export const ROLE_MODULE_PRESETS: Record<UserRole, string[]> = {
+  Owner: APP_MODULES.map((m) => m.id),
+  'Store Manager': [
+    'pos',
+    'pos_settings',
+    'restaurant',
+    'inventory',
+    'sales',
+    'invoicing',
+    'crm',
+    'online_orders',
+    'ecommerce',
+    'website',
+    'purchase',
+    'manufacturing',
+    'quality',
+    'repair',
+    'maintenance',
+    'field_service',
+    'employees',
+    'attendances',
+    'time_off',
+    'appraisals',
+    'planning',
+    'approvals',
+    'documents',
+    'knowledge',
+    'expenses',
+    'etims',
+    'analytics',
+    'helpdesk',
+    'appointments',
+    'fleet',
+  ],
+  'HR Officer': [
+    'employees',
+    'payroll',
+    'attendances',
+    'recruitment',
+    'time_off',
+    'appraisals',
+    'planning',
+    'documents',
+    'approvals',
+    'knowledge',
+    'elearning',
+    'events',
+    'survey',
+    'expenses',
+  ],
+  Accountant: [
+    'accounting',
+    'invoicing',
+    'sales',
+    'expenses',
+    'sign',
+    'etims',
+    'analytics',
+    'payroll',
+    'purchase',
+    'subscriptions',
+    'rental',
+    'documents',
+    'approvals',
+    'crm',
+  ],
+  'Inventory Clerk': [
+    'inventory',
+    'purchase',
+    'manufacturing',
+    'quality',
+    'repair',
+    'maintenance',
+    'online_orders',
+    'fleet',
+    'documents',
+    'knowledge',
+    'pos',
+  ],
+  Cashier: ['pos', 'restaurant', 'online_orders', 'appointments', 'helpdesk'],
+  'Field Agent': [
+    'field_service',
+    'crm',
+    'sales',
+    'invoicing',
+    'fleet',
+    'expenses',
+    'appointments',
+  ],
+};
+
+export function getDefaultModulesForRole(role: UserRole): string[] {
+  return [...(ROLE_MODULE_PRESETS[role] || ROLE_MODULE_PRESETS.Cashier)];
+}
+
+export interface TemplateProductBlueprint {
+  sku: string;
+  name: string;
+  category: string;
+  subCategory: string;
+  priceKes: number;
+  costKes: number;
+  taxCode: TaxCode;
+  unit: string;
+  reorderPoint: number;
+  initialQty: number;
+  zoneIndex?: number;
+  slotIndex?: number;
+}
+
+export interface BusinessIndustryTemplate {
+  id: string;
+  name: string;
+  sector: string;
+  tagline: string;
+  description: string;
+  installedModuleIds: string[];
+  layoutConfig: BusinessLayoutConfig;
+  catalogTaxonomy: CategoryGroup[];
+  offers: PromoOffer[];
+  starterProducts: TemplateProductBlueprint[];
+  hardwareDefaults: Partial<PosHardwareConfig>;
+  posGridDensity: 'comfortable' | 'compact';
+  enableStarterGateways: boolean;
+}
+
+export const BUSINESS_INDUSTRY_TEMPLATES: BusinessIndustryTemplate[] = [
+  {
+    id: 'supermarket',
+    name: 'Supermarket & Minimart',
+    sector: 'Grocery · FMCG Retail',
+    tagline: 'High-speed barcode POS, aisles & shelves, zero-rated & 16% VAT staples',
+    description:
+      'Pre-configures Fresh Produce, Dairy, Beverages & Pantry aisles with barcode-ready POS density, cash drawer kick, and sample Kenyan FMCG SKUs.',
+    posGridDensity: 'compact',
+    enableStarterGateways: true,
+    installedModuleIds: [
+      'pos',
+      'pos_settings',
+      'inventory',
+      'purchase',
+      'sales',
+      'invoicing',
+      'accounting',
+      'crm',
+      'employees',
+      'attendances',
+      'payroll',
+      'etims',
+      'analytics',
+      'ecommerce',
+      'online_orders',
+      'payment_gateways',
+      'backups',
+      'security',
+    ],
+    layoutConfig: {
+      layoutMode: 'retail_shelves',
+      zoneLabel: 'Aisle / Section',
+      slotLabel: 'Shelf / Cold Bay',
+      autoMarkTableNeedsClearing: false,
+      showShelfOnPosTile: true,
+      zones: [
+        {
+          id: 'zone-sm-aisle1',
+          storeId: 'default',
+          name: 'Aisle 1 · Chilled Dairy & Produce',
+          kind: 'section',
+          slots: [
+            { id: 'sl-sm-1', code: 'A1-CH1', label: 'Chiller Bay 1 (Milk & Yoghurt)', capacity: 80, status: 'available' },
+            { id: 'sl-sm-2', code: 'A1-PRD', label: 'Fresh Produce Stand', capacity: 60, status: 'available' },
+          ],
+        },
+        {
+          id: 'zone-sm-aisle2',
+          storeId: 'default',
+          name: 'Aisle 2 · Dry Pantry & Beverages',
+          kind: 'section',
+          slots: [
+            { id: 'sl-sm-3', code: 'A2-PAN', label: 'Flour, Sugar & Cooking Oil', capacity: 120, status: 'available' },
+            { id: 'sl-sm-4', code: 'A2-BEV', label: 'Tea, Coffee & Soft Drinks', capacity: 100, status: 'available' },
+          ],
+        },
+      ],
+    },
+    catalogTaxonomy: [
+      { id: 'cat-sm-1', name: 'Dairy & Fresh', subCategories: ['Fresh Milk', 'Bread & Bakery', 'Eggs & Produce'] },
+      { id: 'cat-sm-2', name: 'Dry Pantry', subCategories: ['Maize & Wheat Flour', 'Cooking Oil', 'Rice & Cereals'] },
+      { id: 'cat-sm-3', name: 'Beverages', subCategories: ['Tea & Coffee', 'Juices & Water', 'Sodas'] },
+      { id: 'cat-sm-4', name: 'Household', subCategories: ['Detergents', 'Personal Care'] },
+    ],
+    offers: [
+      {
+        id: 'off-sm-1',
+        name: 'Weekend Pantry Bundle (5% Off)',
+        code: 'PANTRY5',
+        type: 'min_qty_percent',
+        value: 5,
+        minQty: 3,
+        targetCategory: 'Dry Pantry',
+        active: true,
+        badgeText: '3+ GET 5% OFF',
+      },
+    ],
+    starterProducts: [
+      { sku: 'SUP-MLK-01', name: 'Fresh Pasteurized Milk 500ml', category: 'Dairy & Fresh', subCategory: 'Fresh Milk', priceKes: 65, costKes: 52, taxCode: 'E_0', unit: 'Pkt', reorderPoint: 24, initialQty: 96, zoneIndex: 0, slotIndex: 0 },
+      { sku: 'SUP-BRD-02', name: 'White Enriched Loaf 400g', category: 'Dairy & Fresh', subCategory: 'Bread & Bakery', priceKes: 65, costKes: 54, taxCode: 'E_0', unit: 'Loaf', reorderPoint: 15, initialQty: 40, zoneIndex: 0, slotIndex: 1 },
+      { sku: 'SUP-FLR-03', name: 'Fortified Maize Meal 2kg', category: 'Dry Pantry', subCategory: 'Maize & Wheat Flour', priceKes: 175, costKes: 145, taxCode: 'E_0', unit: 'Pkt', reorderPoint: 30, initialQty: 110, zoneIndex: 1, slotIndex: 0 },
+      { sku: 'SUP-OIL-04', name: 'Pure Vegetable Cooking Oil 2L', category: 'Dry Pantry', subCategory: 'Cooking Oil', priceKes: 640, costKes: 530, taxCode: 'B_16', unit: 'Btl', reorderPoint: 15, initialQty: 55, zoneIndex: 1, slotIndex: 0 },
+      { sku: 'SUP-TEA-05', name: 'Kericho Gold Estate Tea 250g', category: 'Beverages', subCategory: 'Tea & Coffee', priceKes: 295, costKes: 225, taxCode: 'B_16', unit: 'Box', reorderPoint: 12, initialQty: 48, zoneIndex: 1, slotIndex: 1 },
+      { sku: 'SUP-DET-06', name: 'Multi-Action Washing Powder 1kg', category: 'Household', subCategory: 'Detergents', priceKes: 380, costKes: 290, taxCode: 'B_16', unit: 'Pouch', reorderPoint: 10, initialQty: 35, zoneIndex: 1, slotIndex: 0 },
+    ],
+    hardwareDefaults: {
+      barcodeScannerEnabled: true,
+      scannerMode: 'hid_wedge',
+      cashDrawerEnabled: true,
+      autoOpenDrawerOnCash: true,
+    },
+  },
+  {
+    id: 'restaurant',
+    name: 'Restaurant, Cafe & Bar',
+    sector: 'Hospitality · Dining & Takeaway',
+    tagline: 'Floors & table clearing, barista/kitchen menu categories, tipping & staff ratings',
+    description:
+      'Sets up Dining Floor & Terrace tables with auto-mark Needs Clearing on payment, Espresso/Kitchen/Pastry categories, server tipping, and takeaway POS.',
+    posGridDensity: 'comfortable',
+    enableStarterGateways: true,
+    installedModuleIds: [
+      'pos',
+      'pos_settings',
+      'restaurant',
+      'inventory',
+      'purchase',
+      'manufacturing',
+      'employees',
+      'attendances',
+      'payroll',
+      'planning',
+      'accounting',
+      'expenses',
+      'etims',
+      'analytics',
+      'online_orders',
+      'payment_gateways',
+      'backups',
+    ],
+    layoutConfig: {
+      layoutMode: 'restaurant_tables',
+      zoneLabel: 'Dining Floor',
+      slotLabel: 'Table',
+      autoMarkTableNeedsClearing: true,
+      showShelfOnPosTile: false,
+      zones: [
+        {
+          id: 'zone-rst-main',
+          storeId: 'default',
+          name: 'Floor 1 · Main Dining',
+          kind: 'floor',
+          slots: [
+            { id: 'sl-rst-t1', code: 'T-01', label: 'Window 2-Top', capacity: 2, status: 'available' },
+            { id: 'sl-rst-t2', code: 'T-02', label: 'Center Booth', capacity: 4, status: 'available' },
+            { id: 'sl-rst-t3', code: 'T-03', label: 'Family Table', capacity: 6, status: 'available' },
+            { id: 'sl-rst-t4', code: 'BAR-1', label: 'Espresso Counter', capacity: 3, status: 'available' },
+          ],
+        },
+        {
+          id: 'zone-rst-patio',
+          storeId: 'default',
+          name: 'Terrace Patio',
+          kind: 'floor',
+          slots: [
+            { id: 'sl-rst-p1', code: 'OUT-1', label: 'Garden Gazebo', capacity: 4, status: 'available' },
+            { id: 'sl-rst-p2', code: 'OUT-2', label: 'Lounge Sofa', capacity: 6, status: 'available' },
+          ],
+        },
+      ],
+    },
+    catalogTaxonomy: [
+      { id: 'cat-rst-1', name: 'Hot Kitchen', subCategories: ['Grills & Nyama', 'Pilau & Mains', 'Sides'] },
+      { id: 'cat-rst-2', name: 'Coffee & Bar', subCategories: ['Espresso Bar', 'Fresh Juices', 'Mocktails'] },
+      { id: 'cat-rst-3', name: 'Bakery & Pastry', subCategories: ['Cakes', 'Savory Pies'] },
+    ],
+    offers: [
+      {
+        id: 'off-rst-1',
+        name: 'Afternoon Coffee & Cake 15% Off',
+        code: 'CAFE15',
+        type: 'percent_off',
+        value: 15,
+        targetCategory: 'Coffee & Bar',
+        active: true,
+        badgeText: '15% OFF COFFEE',
+      },
+    ],
+    starterProducts: [
+      { sku: 'RST-LAT-01', name: 'Single-Origin Kenyan Latte', category: 'Coffee & Bar', subCategory: 'Espresso Bar', priceKes: 380, costKes: 95, taxCode: 'B_16', unit: 'Cup', reorderPoint: 10, initialQty: 120 },
+      { sku: 'RST-JUC-02', name: 'Fresh Passion & Mango Juice', category: 'Coffee & Bar', subCategory: 'Fresh Juices', priceKes: 320, costKes: 90, taxCode: 'B_16', unit: 'Glass', reorderPoint: 10, initialQty: 80 },
+      { sku: 'RST-GRL-03', name: 'Charcoal Nyama Choma Platter', category: 'Hot Kitchen', subCategory: 'Grills & Nyama', priceKes: 1450, costKes: 780, taxCode: 'B_16', unit: 'Plate', reorderPoint: 5, initialQty: 45 },
+      { sku: 'RST-PIL-04', name: 'Coastal Beef Pilau & Kachumbari', category: 'Hot Kitchen', subCategory: 'Pilau & Mains', priceKes: 750, costKes: 360, taxCode: 'B_16', unit: 'Plate', reorderPoint: 8, initialQty: 60 },
+      { sku: 'RST-PAS-05', name: 'Warm Chocolate Croissant', category: 'Bakery & Pastry', subCategory: 'Cakes', priceKes: 290, costKes: 110, taxCode: 'B_16', unit: 'Pc', reorderPoint: 6, initialQty: 36 },
+    ],
+    hardwareDefaults: {
+      printerEnabled: true,
+      cardTerminalEnabled: true,
+      barcodeScannerEnabled: false,
+    },
+  },
+  {
+    id: 'pharmacy',
+    name: 'Pharmacy & Chemist',
+    sector: 'Healthcare · Dispensary & OTC',
+    tagline: 'KRA VAT-exempt medicine tax rules, dispensary bays & batch quality checks',
+    description:
+      'Configures Dispensary Counter & OTC Wellness shelves, VAT-Exempt (Code A) prescription defaults, Quality inspection workflows, and fast barcode lookup.',
+    posGridDensity: 'compact',
+    enableStarterGateways: true,
+    installedModuleIds: [
+      'pos',
+      'pos_settings',
+      'inventory',
+      'purchase',
+      'quality',
+      'invoicing',
+      'accounting',
+      'crm',
+      'employees',
+      'payroll',
+      'etims',
+      'analytics',
+      'appointments',
+      'online_orders',
+      'payment_gateways',
+      'backups',
+    ],
+    layoutConfig: {
+      layoutMode: 'retail_shelves',
+      zoneLabel: 'Chemist Zone',
+      slotLabel: 'Bin / Shelf',
+      autoMarkTableNeedsClearing: false,
+      showShelfOnPosTile: true,
+      zones: [
+        {
+          id: 'zone-ph-disp',
+          storeId: 'default',
+          name: 'Dispensary Vault',
+          kind: 'section',
+          slots: [
+            { id: 'sl-ph-1', code: 'RX-A1', label: 'Antibiotics & Chronic Care', capacity: 150, status: 'available' },
+            { id: 'sl-ph-2', code: 'RX-COLD', label: 'Cold Chain Vaccines / Insulin', capacity: 40, status: 'available' },
+          ],
+        },
+        {
+          id: 'zone-ph-otc',
+          storeId: 'default',
+          name: 'OTC & Wellness Floor',
+          kind: 'section',
+          slots: [
+            { id: 'sl-ph-3', code: 'OTC-01', label: 'Pain Relief & Vitamins', capacity: 100, status: 'available' },
+            { id: 'sl-ph-4', code: 'OTC-02', label: 'First Aid & Skincare', capacity: 80, status: 'available' },
+          ],
+        },
+      ],
+    },
+    catalogTaxonomy: [
+      { id: 'cat-ph-1', name: 'Prescription (Rx)', subCategories: ['Antibiotics', 'Cardiovascular & Chronic', 'Paediatrics'] },
+      { id: 'cat-ph-2', name: 'OTC Medicines', subCategories: ['Analgesics', 'Cough & Flu', 'Digestive'] },
+      { id: 'cat-ph-3', name: 'Supplements & Care', subCategories: ['Vitamins', 'First Aid', 'Dermacare'] },
+    ],
+    offers: [],
+    starterProducts: [
+      { sku: 'PHM-PAR-01', name: 'Paracetamol 500mg Blister (20s)', category: 'OTC Medicines', subCategory: 'Analgesics', priceKes: 120, costKes: 65, taxCode: 'A_EXEMPT', unit: 'Pack', reorderPoint: 30, initialQty: 140, zoneIndex: 1, slotIndex: 0 },
+      { sku: 'PHM-AMX-02', name: 'Amoxicillin 500mg Caps (15s)', category: 'Prescription (Rx)', subCategory: 'Antibiotics', priceKes: 350, costKes: 190, taxCode: 'A_EXEMPT', unit: 'Pack', reorderPoint: 15, initialQty: 60, zoneIndex: 0, slotIndex: 0 },
+      { sku: 'PHM-VIT-03', name: 'Vitamin C + Zinc Effervescent 20s', category: 'Supplements & Care', subCategory: 'Vitamins', priceKes: 650, costKes: 410, taxCode: 'B_16', unit: 'Tube', reorderPoint: 10, initialQty: 35, zoneIndex: 1, slotIndex: 0 },
+      { sku: 'PHM-AID-04', name: 'Sterile Bandage & Antiseptic Kit', category: 'Supplements & Care', subCategory: 'First Aid', priceKes: 480, costKes: 300, taxCode: 'B_16', unit: 'Kit', reorderPoint: 8, initialQty: 25, zoneIndex: 1, slotIndex: 1 },
+    ],
+    hardwareDefaults: {
+      barcodeScannerEnabled: true,
+      scannerMode: 'hid_wedge',
+      cashDrawerEnabled: true,
+      cardTerminalEnabled: true,
+    },
+  },
+  {
+    id: 'fashion',
+    name: 'Fashion & Apparel Boutique',
+    sector: 'Apparel · Footwear & Accessories',
+    tagline: 'Rack zoning, size/color SKU matrix, seasonal promos & omnichannel webshop',
+    description:
+      'Sets up Showroom Racks & Footwear Wall, Apparel/Footwear/Accessories subcategories, eCommerce online lookbook sync, and seasonal discount promos.',
+    posGridDensity: 'comfortable',
+    enableStarterGateways: true,
+    installedModuleIds: [
+      'pos',
+      'pos_settings',
+      'inventory',
+      'purchase',
+      'sales',
+      'invoicing',
+      'crm',
+      'ecommerce',
+      'online_orders',
+      'website',
+      'sms_marketing',
+      'social_marketing',
+      'employees',
+      'payroll',
+      'etims',
+      'analytics',
+      'payment_gateways',
+      'backups',
+    ],
+    layoutConfig: {
+      layoutMode: 'retail_shelves',
+      zoneLabel: 'Showroom Zone',
+      slotLabel: 'Display Rack',
+      autoMarkTableNeedsClearing: false,
+      showShelfOnPosTile: true,
+      zones: [
+        {
+          id: 'zone-fsh-1',
+          storeId: 'default',
+          name: 'Main Floor · Apparel Racks',
+          kind: 'section',
+          slots: [
+            { id: 'sl-fsh-1', code: 'RK-W1', label: "Women's New Arrivals", capacity: 60, status: 'available' },
+            { id: 'sl-fsh-2', code: 'RK-M1', label: "Men's Smart Casual", capacity: 60, status: 'available' },
+          ],
+        },
+        {
+          id: 'zone-fsh-2',
+          storeId: 'default',
+          name: 'Footwear & Bags Wall',
+          kind: 'section',
+          slots: [
+            { id: 'sl-fsh-3', code: 'WALL-FW', label: 'Sneakers & Leather Shoes', capacity: 45, status: 'available' },
+            { id: 'sl-fsh-4', code: 'WALL-BG', label: 'Handbags & Totes', capacity: 35, status: 'available' },
+          ],
+        },
+      ],
+    },
+    catalogTaxonomy: [
+      { id: 'cat-fsh-1', name: "Women's Wear", subCategories: ['Dresses', 'Tops & Blazers', 'Denim'] },
+      { id: 'cat-fsh-2', name: "Men's Wear", subCategories: ['Shirts & Polos', 'Chinos & Trousers', 'Jackets'] },
+      { id: 'cat-fsh-3', name: 'Footwear & Bags', subCategories: ['Leather Shoes', 'Sneakers', 'Tote Bags'] },
+    ],
+    offers: [
+      {
+        id: 'off-fsh-1',
+        name: 'Buy 2+ Apparel Items Get 10% Off',
+        code: 'STYLE10',
+        type: 'min_qty_percent',
+        value: 10,
+        minQty: 2,
+        targetCategory: 'All',
+        active: true,
+        badgeText: 'BUY 2+ GET 10%',
+      },
+    ],
+    starterProducts: [
+      { sku: 'FSH-DRS-01', name: 'Linen Midi Wrap Dress (M/L)', category: "Women's Wear", subCategory: 'Dresses', priceKes: 3800, costKes: 1950, taxCode: 'B_16', unit: 'Pc', reorderPoint: 4, initialQty: 18, zoneIndex: 0, slotIndex: 0 },
+      { sku: 'FSH-SHT-02', name: 'Oxford Cotton Casual Shirt', category: "Men's Wear", subCategory: 'Shirts & Polos', priceKes: 2600, costKes: 1350, taxCode: 'B_16', unit: 'Pc', reorderPoint: 5, initialQty: 24, zoneIndex: 0, slotIndex: 1 },
+      { sku: 'FSH-SHO-03', name: 'Handcrafted Nairobi Leather Loafers', category: 'Footwear & Bags', subCategory: 'Leather Shoes', priceKes: 5400, costKes: 3100, taxCode: 'B_16', unit: 'Pair', reorderPoint: 3, initialQty: 14, zoneIndex: 1, slotIndex: 0 },
+      { sku: 'FSH-BAG-04', name: 'Canvas & Leather Weekender Tote', category: 'Footwear & Bags', subCategory: 'Tote Bags', priceKes: 3200, costKes: 1700, taxCode: 'B_16', unit: 'Pc', reorderPoint: 4, initialQty: 16, zoneIndex: 1, slotIndex: 1 },
+    ],
+    hardwareDefaults: {
+      cardTerminalEnabled: true,
+      barcodeScannerEnabled: true,
+    },
+  },
+  {
+    id: 'electronics',
+    name: 'Electronics, Phones & Hardware',
+    sector: 'Tech Devices · Spare Parts & Tools',
+    tagline: 'Security vault bins, warranty Repair RMA workflow, B2B quotes & EMV card PDQ',
+    description:
+      'Enables Point of Sale, Repair RMA, Maintenance, B2B Invoicing, and CRM alongside locked display vault zones for high-value gadgets & tools.',
+    posGridDensity: 'comfortable',
+    enableStarterGateways: true,
+    installedModuleIds: [
+      'pos',
+      'pos_settings',
+      'inventory',
+      'repair',
+      'maintenance',
+      'purchase',
+      'sales',
+      'invoicing',
+      'crm',
+      'accounting',
+      'ecommerce',
+      'online_orders',
+      'employees',
+      'payroll',
+      'etims',
+      'analytics',
+      'payment_gateways',
+      'backups',
+    ],
+    layoutConfig: {
+      layoutMode: 'retail_shelves',
+      zoneLabel: 'Showroom / Vault',
+      slotLabel: 'Cabinet / Pegboard',
+      autoMarkTableNeedsClearing: false,
+      showShelfOnPosTile: true,
+      zones: [
+        {
+          id: 'zone-elc-1',
+          storeId: 'default',
+          name: 'Glass Display & Security Vault',
+          kind: 'section',
+          slots: [
+            { id: 'sl-elc-1', code: 'VLT-01', label: 'Smartphones & Laptops', capacity: 40, status: 'available' },
+            { id: 'sl-elc-2', code: 'DSP-02', label: 'Chargers, Audio & Cables', capacity: 90, status: 'available' },
+          ],
+        },
+        {
+          id: 'zone-elc-2',
+          storeId: 'default',
+          name: 'Hardware & Power Tools',
+          kind: 'section',
+          slots: [
+            { id: 'sl-elc-3', code: 'HW-A1', label: 'Cordless Drills & Meters', capacity: 30, status: 'available' },
+            { id: 'sl-elc-4', code: 'REP-BAY', label: 'Repair Workbench & Spares', capacity: 25, status: 'available' },
+          ],
+        },
+      ],
+    },
+    catalogTaxonomy: [
+      { id: 'cat-elc-1', name: 'Smartphones & Computing', subCategories: ['Smartphones', 'SSD & RAM', 'Peripherals'] },
+      { id: 'cat-elc-2', name: 'Power & Cables', subCategories: ['USB-C Chargers', 'Power Banks', 'Surge Strips'] },
+      { id: 'cat-elc-3', name: 'Tools & Hardware', subCategories: ['Power Drills', 'Multimeters', 'LED Lighting'] },
+    ],
+    offers: [],
+    starterProducts: [
+      { sku: 'ELC-CHG-01', name: '65W GaN Fast USB-C Charger', category: 'Power & Cables', subCategory: 'USB-C Chargers', priceKes: 2850, costKes: 1650, taxCode: 'B_16', unit: 'Pc', reorderPoint: 8, initialQty: 32, zoneIndex: 0, slotIndex: 1 },
+      { sku: 'ELC-SSD-02', name: 'NVMe M.2 SSD 1TB Gen4', category: 'Smartphones & Computing', subCategory: 'SSD & RAM', priceKes: 9800, costKes: 7400, taxCode: 'B_16', unit: 'Pc', reorderPoint: 4, initialQty: 15, zoneIndex: 0, slotIndex: 0 },
+      { sku: 'ELC-PWB-03', name: '20,000mAh PD Power Bank', category: 'Power & Cables', subCategory: 'Power Banks', priceKes: 3600, costKes: 2250, taxCode: 'B_16', unit: 'Pc', reorderPoint: 6, initialQty: 24, zoneIndex: 0, slotIndex: 1 },
+      { sku: 'ELC-DRL-04', name: 'Brushless 20V Cordless Drill Kit', category: 'Tools & Hardware', subCategory: 'Power Drills', priceKes: 12500, costKes: 8900, taxCode: 'B_16', unit: 'Kit', reorderPoint: 3, initialQty: 10, zoneIndex: 1, slotIndex: 0 },
+    ],
+    hardwareDefaults: {
+      barcodeScannerEnabled: true,
+      cardTerminalEnabled: true,
+      printerEnabled: true,
+    },
+  },
+  {
+    id: 'salon',
+    name: 'Salon, Spa & Service Studio',
+    sector: 'Beauty · Wellness & Booking',
+    tagline: 'Service stations/chairs, client Appointments booking, staff tips & ratings',
+    description:
+      'Sets up Styling Chairs & Spa Rooms as interactive floor slots, pre-enables Appointments + CRM + Staff Tipping + Retail Haircare shelf tracking.',
+    posGridDensity: 'comfortable',
+    enableStarterGateways: true,
+    installedModuleIds: [
+      'pos',
+      'pos_settings',
+      'appointments',
+      'crm',
+      'inventory',
+      'employees',
+      'attendances',
+      'payroll',
+      'planning',
+      'accounting',
+      'expenses',
+      'sms_marketing',
+      'etims',
+      'analytics',
+      'payment_gateways',
+      'backups',
+    ],
+    layoutConfig: {
+      layoutMode: 'hybrid',
+      zoneLabel: 'Studio Stations',
+      slotLabel: 'Chair / Room',
+      autoMarkTableNeedsClearing: true,
+      showShelfOnPosTile: true,
+      zones: [
+        {
+          id: 'zone-sal-1',
+          storeId: 'default',
+          name: 'Floor 1 · Styling & Nail Bar',
+          kind: 'floor',
+          slots: [
+            { id: 'sl-sal-1', code: 'CH-01', label: 'Styling Chair 1', capacity: 1, status: 'available' },
+            { id: 'sl-sal-2', code: 'CH-02', label: 'Styling Chair 2', capacity: 1, status: 'available' },
+            { id: 'sl-sal-3', code: 'NAIL-1', label: 'Manicure & Gel Station', capacity: 2, status: 'available' },
+          ],
+        },
+        {
+          id: 'zone-sal-2',
+          storeId: 'default',
+          name: 'Retail Beauty Counter',
+          kind: 'section',
+          slots: [
+            { id: 'sl-sal-4', code: 'SH-SERUM', label: 'Oils, Shampoos & Serums', capacity: 50, status: 'available' },
+          ],
+        },
+      ],
+    },
+    catalogTaxonomy: [
+      { id: 'cat-sal-1', name: 'Hair Services', subCategories: ['Braiding & Locs', 'Wash & Blowdry', 'Executive Cut'] },
+      { id: 'cat-sal-2', name: 'Spa & Nails', subCategories: ['Gel Manicure', 'Deep Tissue Massage'] },
+      { id: 'cat-sal-3', name: 'Retail Care', subCategories: ['Botanical Oils', 'Sulfate-Free Shampoo'] },
+    ],
+    offers: [],
+    starterProducts: [
+      { sku: 'SAL-WASH-01', name: 'Signature Wash, Deep Condition & Blowdry', category: 'Hair Services', subCategory: 'Wash & Blowdry', priceKes: 1800, costKes: 350, taxCode: 'B_16', unit: 'Session', reorderPoint: 1, initialQty: 999 },
+      { sku: 'SAL-NAIL-02', name: 'Gel Builder Manicure & Nail Art', category: 'Spa & Nails', subCategory: 'Gel Manicure', priceKes: 2200, costKes: 450, taxCode: 'B_16', unit: 'Session', reorderPoint: 1, initialQty: 999 },
+      { sku: 'SAL-OIL-03', name: 'Organic Rosemary & Castor Hair Oil 150ml', category: 'Retail Care', subCategory: 'Botanical Oils', priceKes: 950, costKes: 480, taxCode: 'B_16', unit: 'Btl', reorderPoint: 8, initialQty: 30, zoneIndex: 1, slotIndex: 0 },
+    ],
+    hardwareDefaults: {
+      cardTerminalEnabled: true,
+      printerEnabled: true,
+    },
+  },
+  {
+    id: 'wholesale',
+    name: 'Wholesale & B2B Distribution',
+    sector: 'B2B · Bulk Warehouse & Van Sales',
+    tagline: 'Warehouse bays, B2B Tax Invoices, Field Agent mobile van-sales & Fleet tracking',
+    description:
+      'Built for distributors and wholesalers needing multi-branch stock transfers, B2B CRM pipelines, formal KRA eTIMS credit invoices, Fleet & Field Service.',
+    posGridDensity: 'compact',
+    enableStarterGateways: true,
+    installedModuleIds: [
+      'inventory',
+      'purchase',
+      'sales',
+      'invoicing',
+      'crm',
+      'accounting',
+      'field_service',
+      'fleet',
+      'pos',
+      'pos_settings',
+      'online_orders',
+      'employees',
+      'payroll',
+      'etims',
+      'analytics',
+      'payment_gateways',
+      'backups',
+      'security',
+    ],
+    layoutConfig: {
+      layoutMode: 'retail_shelves',
+      zoneLabel: 'Warehouse Zone',
+      slotLabel: 'Pallet Bay',
+      autoMarkTableNeedsClearing: false,
+      showShelfOnPosTile: true,
+      zones: [
+        {
+          id: 'zone-wh-1',
+          storeId: 'default',
+          name: 'Main Depot · Bulk Pallets',
+          kind: 'section',
+          slots: [
+            { id: 'sl-wh-1', code: 'BAY-A1', label: 'Bulk Grains & Mill Bags', capacity: 500, status: 'available' },
+            { id: 'sl-wh-2', code: 'BAY-B2', label: 'Carton Beverages & Oils', capacity: 400, status: 'available' },
+          ],
+        },
+      ],
+    },
+    catalogTaxonomy: [
+      { id: 'cat-wh-1', name: 'Bulk Commodities', subCategories: ['Bales & Sacks', 'Oil Jerricans'] },
+      { id: 'cat-wh-2', name: 'Packaging & Supplies', subCategories: ['Kraft Cartons', 'Thermal Rolls'] },
+    ],
+    offers: [],
+    starterProducts: [
+      { sku: 'WHL-BALE-01', name: 'Maize Meal Bale (12 x 2kg)', category: 'Bulk Commodities', subCategory: 'Bales & Sacks', priceKes: 1920, costKes: 1680, taxCode: 'E_0', unit: 'Bale', reorderPoint: 20, initialQty: 150, zoneIndex: 0, slotIndex: 0 },
+      { sku: 'WHL-OIL-02', name: 'Commercial Cooking Oil 20L Jerrican', category: 'Bulk Commodities', subCategory: 'Oil Jerricans', priceKes: 5800, costKes: 5100, taxCode: 'B_16', unit: 'Jerrican', reorderPoint: 10, initialQty: 65, zoneIndex: 0, slotIndex: 1 },
+      { sku: 'WHL-TRL-03', name: '80mm Thermal POS Rolls (Box of 50)', category: 'Packaging & Supplies', subCategory: 'Thermal Rolls', priceKes: 4500, costKes: 3300, taxCode: 'B_16', unit: 'Box', reorderPoint: 5, initialQty: 40, zoneIndex: 0, slotIndex: 1 },
+    ],
+    hardwareDefaults: {
+      barcodeScannerEnabled: true,
+      printerEnabled: true,
+    },
+  },
+  {
+    id: 'custom',
+    name: 'Clean Custom Workspace',
+    sector: 'Blank Enterprise Canvas',
+    tagline: 'Zero pre-loaded SKUs, tables or gateways — configure everything manually',
+    description:
+      'Starts completely clean with real-data enforcement: add your own SKUs, payment gateways, sections, and staff accounts from scratch.',
+    posGridDensity: 'comfortable',
+    enableStarterGateways: false,
+    installedModuleIds: [
+      'pos',
+      'pos_settings',
+      'inventory',
+      'invoicing',
+      'accounting',
+      'purchase',
+      'sales',
+      'crm',
+      'employees',
+      'payroll',
+      'etims',
+      'analytics',
+      'field_service',
+      'payment_gateways',
+      'security',
+      'studio',
+      'ecommerce',
+      'online_orders',
+      'website',
+      'backups',
+    ],
+    layoutConfig: {
+      layoutMode: 'retail_shelves',
+      zoneLabel: 'Store Section',
+      slotLabel: 'Shelf / Rack',
+      autoMarkTableNeedsClearing: false,
+      showShelfOnPosTile: true,
+      zones: [],
+    },
+    catalogTaxonomy: [],
+    offers: [],
+    starterProducts: [],
+    hardwareDefaults: {},
+  },
+];
+
+export function getIndustryTemplateById(templateId?: string): BusinessIndustryTemplate {
+  return (
+    BUSINESS_INDUSTRY_TEMPLATES.find((t) => t.id === templateId) ||
+    BUSINESS_INDUSTRY_TEMPLATES[BUSINESS_INDUSTRY_TEMPLATES.length - 1]
+  );
+}

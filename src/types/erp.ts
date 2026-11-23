@@ -3,6 +3,7 @@ export type AccountTier = 'admin' | 'employee' | 'user';
 export type UserRole =
   | 'Owner'
   | 'Store Manager'
+  | 'HR Officer'
   | 'Cashier'
   | 'Inventory Clerk'
   | 'Accountant'
@@ -86,6 +87,41 @@ export interface PosCustomizationConfig {
   quickCashNotes: number[];
 }
 
+export interface PosHardwareConfig {
+  printerEnabled: boolean;
+  printerConnection: 'browser_print' | 'webusb_escpos' | 'webserial_escpos' | 'network_ip';
+  printerModel: string;
+  printerPaperChars: 32 | 42 | 48;
+  printerNetworkIp?: string;
+  cashDrawerEnabled: boolean;
+  cashDrawerTrigger: 'printer_rj11' | 'usb_relay' | 'serial_dtr';
+  autoOpenDrawerOnCash: boolean;
+  barcodeScannerEnabled: boolean;
+  scannerMode: 'hid_wedge' | 'webserial' | 'camera_manual';
+  cardTerminalEnabled: boolean;
+  cardTerminalProvider: 'pesapal_sabi' | 'ingenico_ecr' | 'verifone_ecr' | 'kcb_pdq' | 'custom_emv';
+  cardTerminalConnection: 'cloud_push' | 'webserial_ecr' | 'webusb_hid' | 'local_ip';
+  cardTerminalId: string;
+  scaleEnabled: boolean;
+  scaleConnection: 'none' | 'webserial_cas';
+}
+
+export type SupportAccessStatus = 'none' | 'pending_approval' | 'approved' | 'revoked';
+
+export interface BusinessSupportAccess {
+  status: SupportAccessStatus;
+  requestedByEmail?: string;
+  requestedAt?: string;
+  reason?: string;
+  requestedDurationHours?: number;
+  approvedBy?: string;
+  approvedAt?: string;
+  revokedAt?: string;
+  expiresAt?: string;
+  allowPiiView?: boolean;
+  allowWorkspaceEnter?: boolean;
+}
+
 export interface PaymentGatewayConfig {
   id: string;
   provider: 'mpesa_daraja' | 'airtel_money' | 'pesapal_card' | 'tkash' | 'bank_rtgs' | 'cash' | 'custom';
@@ -107,6 +143,7 @@ export interface EmployeePermissionSet {
   canViewEtims: boolean;
   canExportReports: boolean;
   canManagePayments: boolean;
+  allowedModuleIds?: string[];
 }
 
 export interface EmployeeRecord {
@@ -225,6 +262,8 @@ export interface BusinessEntity {
   ownerId?: string;
   ownerName?: string;
   ownerEmail?: string;
+  templateId?: string;
+  supportAccess?: BusinessSupportAccess;
   slug: string;
   name: string;
   country: 'KE' | 'UG' | 'TZ' | 'GB' | 'US';
@@ -251,6 +290,7 @@ export interface BusinessEntity {
   storefrontPickupEnabled?: boolean;
   installedModuleIds: string[];
   posConfig: PosCustomizationConfig;
+  hardwareConfig?: PosHardwareConfig;
   paymentGateways: PaymentGatewayConfig[];
   layoutConfig?: BusinessLayoutConfig;
   catalogTaxonomy?: CategoryGroup[];

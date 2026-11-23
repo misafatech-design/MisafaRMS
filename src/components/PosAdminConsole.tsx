@@ -3,6 +3,7 @@ import {
   Award,
   CheckCircle2,
   Clock,
+  CreditCard,
   Download,
   FileSpreadsheet,
   FolderTree,
@@ -11,11 +12,14 @@ import {
   LogOut,
   MonitorSmartphone,
   Plus,
+  Printer,
+  ScanBarcode,
   Settings2,
   Sparkles,
   Star,
   Tag,
   Trash2,
+  Usb,
 } from 'lucide-react';
 import {
   BusinessEntity,
@@ -25,6 +29,7 @@ import {
   EmployeeRecord,
   LayoutMode,
   PosCustomizationConfig,
+  PosHardwareConfig,
   PromoOffer,
   SaleTransaction,
   ShiftAttendanceLog,
@@ -32,8 +37,19 @@ import {
   StoreBranch,
 } from '../types/erp';
 import { formatMoney } from '../utils/cryptoSync';
+import {
+  BUSINESS_INDUSTRY_TEMPLATES,
+  DEFAULT_POS_HARDWARE_CONFIG,
+} from '../data/businessTemplates';
+import {
+  buildCashDrawerKickBytes,
+  buildEscPosReceiptBytes,
+  dispatchHardwareBytes,
+  pairSerialPeripheral,
+  pairUsbThermalPrinter,
+} from '../utils/posHardware';
 
-type AdminTab = 'terminal' | 'layout' | 'categories' | 'offers' | 'staff';
+type AdminTab = 'terminal' | 'hardware' | 'layout' | 'categories' | 'offers' | 'staff';
 
 interface PosAdminConsoleProps {
   business: BusinessEntity;
@@ -43,6 +59,9 @@ interface PosAdminConsoleProps {
   employees: EmployeeRecord[];
   attendanceLogs: ShiftAttendanceLog[];
   onUpdatePosConfig: (config: PosCustomizationConfig) => Promise<void>;
+  onUpdateHardwareConfig: (hw: PosHardwareConfig) => Promise<void>;
+  onApplyTemplate?: (templateId: string, seedStarterProducts: boolean) => Promise<void>;
+  onHardwareLog?: (event: string, detail: string) => Promise<void>;
   onUpdateLayoutConfig: (layoutConfig: BusinessLayoutConfig) => Promise<void>;
   onUpdateTaxonomy: (taxonomy: CategoryGroup[]) => Promise<void>;
   onUpdateOffers: (offers: PromoOffer[]) => Promise<void>;
@@ -59,6 +78,9 @@ export const PosAdminConsole: React.FC<PosAdminConsoleProps> = ({
   employees,
   attendanceLogs,
   onUpdatePosConfig,
+  onUpdateHardwareConfig,
+  onApplyTemplate,
+  onHardwareLog,
   onUpdateLayoutConfig,
   onUpdateTaxonomy,
   onUpdateOffers,
@@ -68,6 +90,16 @@ export const PosAdminConsole: React.FC<PosAdminConsoleProps> = ({
 }) => {
   const [activeTab, setActiveTab] = useState<AdminTab>('terminal');
   const [draftConfig, setDraftConfig] = useState<PosCustomizationConfig>(business.posConfig);
+  const [draftHw, setDraftHw] = useState<PosHardwareConfig>(
+    business.hardwareConfig || DEFAULT_POS_HARDWARE_CONFIG
+  );
+  const [pairedDeviceName, setPairedDeviceName] = useState<string>('');
+  const [hwStatusMsg, setHwStatusMsg] = useState<string>('');
+  const [selectedTemplateId, setSelectedTemplateId] = useState<string>(
+    business.templateId || 'supermarket'
+  );
+  const [seedTemplateSkus, setSeedTemplateSkus] = useState<boolean>(true);
+  const [applyingTemplate, setApplyingTemplate] = useState<boolean>(false);
   const [quickNotesInput, setQuickNotesInput] = useState(
     business.posConfig.quickCashNotes.join(', ')
   );
@@ -358,6 +390,7 @@ CASHIER WORKFLOW
 
   const tabs: Array<{ id: AdminTab; label: string; icon: React.ReactNode }> = [
     { id: 'terminal', label: 'POS Setup & Z-Reports', icon: <Settings2 className="h-3.5 w-3.5" /> },
+    { id: 'hardware', label: 'Hardware & Card PDQ', icon: <Printer className="h-3.5 w-3.5" /> },
     { id: 'layout', label: 'Floors / Tables & Shelves', icon: <Layers className="h-3.5 w-3.5" /> },
     { id: 'categories', label: 'Categories & Subcategories', icon: <FolderTree className="h-3.5 w-3.5" /> },
     { id: 'offers', label: 'Offers & Promos', icon: <Tag className="h-3.5 w-3.5" /> },
@@ -635,6 +668,411 @@ CASHIER WORKFLOW
                 <span className="font-mono tabular-nums">
                   {formatMoney(shiftSummary.totalVat, business.currency)}
                 </span>
+              </div>
+            </div>
+          </section>
+
+          {/* Ready-to-Use Industry Blueprint Switcher */}
+          {onApplyTemplate && (
+            <section className="space-y-3 rounded-xl border border-slate-200 bg-white p-5 lg:col-span-12 dark:border-slate-800 dark:bg-slate-900">
+              <div className="flex flex-wrap items-center justify-between gap-3">
+                <div>
+                  <h2 className="font-display text-sm font-semibold text-slate-900 dark:text-slate-100">
+                    Ready-to-Use Industry Blueprints
+                  </h2>
+                  <p className="mt-0.5 text-xs text-slate-500 dark:text-slate-400">
+                    Apply a pre-configured sector template (zones, categories, live offers, POS hardware defaults, and optional starter SKUs) without starting from scratch.
+                  </p>
+                </div>
+                <label className="inline-flex items-center gap-2 text-xs text-slate-700 dark:text-slate-300">
+                  <input
+                    type="checkbox"
+                    checked={seedTemplateSkus}
+                    onChange={(e) => setSeedTemplateSkus(e.target.checked)}
+                    className="rounded border-slate-300 text-teal-700"
+                  />
+                  <span>Also seed starter industry catalog SKUs</span>
+                </label>
+              </div>
+              <div className="grid grid-cols-1 gap-2.5 sm:grid-cols-2 lg:grid-cols-4">
+                {BUSINESS_INDUSTRY_TEMPLATES.map((tpl) => (
+                  <button
+                    key={tpl.id}
+                    type="button"
+                    onClick={() => setSelectedTemplateId(tpl.id)}
+                    className={`rounded-lg border p-3 text-left text-xs transition-colors ${
+                      selectedTemplateId === tpl.id
+                        ? 'border-teal-700 bg-teal-50/70 dark:border-teal-500 dark:bg-teal-950/40'
+                        : 'border-slate-200 bg-slate-50/50 hover:bg-slate-100 dark:border-slate-800 dark:bg-slate-800/40'
+                    }`}
+                  >
+                    <p className="font-display font-semibold text-slate-900 dark:text-slate-100">
+                      {tpl.name}
+                    </p>
+                    <p className="mt-0.5 text-[11px] text-slate-500 dark:text-slate-400">
+                      {tpl.tagline}
+                    </p>
+                  </button>
+                ))}
+              </div>
+              <div className="flex justify-end">
+                <button
+                  type="button"
+                  disabled={applyingTemplate}
+                  onClick={async () => {
+                    setApplyingTemplate(true);
+                    try {
+                      await onApplyTemplate(selectedTemplateId, seedTemplateSkus);
+                      notifySaved(`Applied "${selectedTemplateId}" industry template to ${business.name}.`);
+                    } finally {
+                      setApplyingTemplate(false);
+                    }
+                  }}
+                  className="rounded-lg bg-slate-900 px-4 py-2 text-xs font-semibold text-white hover:bg-slate-800 disabled:opacity-50 dark:bg-teal-600 dark:hover:bg-teal-700"
+                >
+                  {applyingTemplate ? 'Applying Blueprint...' : 'Apply Selected Industry Template'}
+                </button>
+              </div>
+            </section>
+          )}
+        </div>
+      )}
+
+      {/* TAB 2: HARDWARE PERIPHERALS (PRINTERS, DRAWERS, SCANNERS, SCALES, CARD PDQ) */}
+      {activeTab === 'hardware' && (
+        <div className="grid grid-cols-1 gap-6 lg:grid-cols-12">
+          <form
+            onSubmit={async (e) => {
+              e.preventDefault();
+              setSaving(true);
+              try {
+                await onUpdateHardwareConfig(draftHw);
+                notifySaved('Saved POS hardware & EMV Card PDQ terminal configuration.');
+              } finally {
+                setSaving(false);
+              }
+            }}
+            className="space-y-5 rounded-xl border border-slate-200 bg-white p-5 lg:col-span-7 dark:border-slate-800 dark:bg-slate-900"
+          >
+            <div className="flex items-center gap-2 border-b border-slate-100 pb-3 dark:border-slate-800">
+              <Printer className="h-4 w-4 text-teal-700 dark:text-teal-400" />
+              <h2 className="font-display text-sm font-semibold text-slate-900 dark:text-slate-100">
+                POS Hardware Peripherals &amp; EMV Card Terminal Settings
+              </h2>
+            </div>
+
+            <div className="grid grid-cols-1 gap-4 text-xs sm:grid-cols-2">
+              <div>
+                <label className="block font-medium text-slate-700 dark:text-slate-300">
+                  Thermal Receipt Printer Connection
+                </label>
+                <select
+                  value={draftHw.printerConnection}
+                  onChange={(e) =>
+                    setDraftHw((h) => ({
+                      ...h,
+                      printerEnabled: true,
+                      printerConnection: e.target.value as PosHardwareConfig['printerConnection'],
+                    }))
+                  }
+                  className="mt-1 w-full rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-slate-900 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-100"
+                >
+                  <option value="browser_print">Browser / OS Thermal Queue (80mm / A4)</option>
+                  <option value="webusb_escpos">Direct WebUSB ESC/POS Thermal Printer</option>
+                  <option value="webserial_escpos">Direct Serial (RS-232 / COM) ESC/POS Printer</option>
+                  <option value="network_ip">LAN / Wi-Fi Network Printer (Port 9100)</option>
+                </select>
+              </div>
+
+              <div>
+                <label className="block font-medium text-slate-700 dark:text-slate-300">
+                  Printer Paper Width &amp; Network IP (if LAN)
+                </label>
+                <div className="mt-1 flex gap-2">
+                  <select
+                    value={draftHw.printerPaperChars}
+                    onChange={(e) =>
+                      setDraftHw((h) => ({
+                        ...h,
+                        printerPaperChars: Number(e.target.value) as 32 | 42 | 48,
+                      }))
+                    }
+                    className="w-28 rounded-lg border border-slate-200 bg-slate-50 px-2 py-2 font-mono text-slate-900 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-100"
+                  >
+                    <option value={42}>80mm (42c)</option>
+                    <option value={48}>80mm (48c)</option>
+                    <option value={32}>58mm (32c)</option>
+                  </select>
+                  <input
+                    type="text"
+                    value={draftHw.printerNetworkIp || ''}
+                    onChange={(e) =>
+                      setDraftHw((h) => ({ ...h, printerNetworkIp: e.target.value }))
+                    }
+                    placeholder="e.g. 192.168.1.250"
+                    className="flex-1 rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 font-mono text-slate-900 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-100"
+                  />
+                </div>
+              </div>
+
+              <div>
+                <label className="block font-medium text-slate-700 dark:text-slate-300">
+                  Barcode Scanner Interface
+                </label>
+                <select
+                  value={draftHw.scannerMode}
+                  onChange={(e) =>
+                    setDraftHw((h) => ({
+                      ...h,
+                      barcodeScannerEnabled: true,
+                      scannerMode: e.target.value as PosHardwareConfig['scannerMode'],
+                    }))
+                  }
+                  className="mt-1 w-full rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-slate-900 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-100"
+                >
+                  <option value="hid_wedge">USB / Bluetooth HID Keyboard Wedge (Instant)</option>
+                  <option value="webserial">WebSerial COM Port Scanner</option>
+                  <option value="camera_manual">Camera / Manual Entry</option>
+                </select>
+              </div>
+
+              <div>
+                <label className="block font-medium text-slate-700 dark:text-slate-300">
+                  Weighing Scale Integration
+                </label>
+                <select
+                  value={draftHw.scaleConnection}
+                  onChange={(e) => {
+                    const val = e.target.value as PosHardwareConfig['scaleConnection'];
+                    setDraftHw((h) => ({
+                      ...h,
+                      scaleEnabled: val !== 'none',
+                      scaleConnection: val,
+                    }));
+                  }}
+                  className="mt-1 w-full rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-slate-900 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-100"
+                >
+                  <option value="none">Disabled (Standard Units)</option>
+                  <option value="webserial_cas">WebSerial Digital Scale (Kg Readout)</option>
+                </select>
+              </div>
+
+              <div>
+                <label className="block font-medium text-slate-700 dark:text-slate-300">
+                  EMV / NFC Card PDQ Terminal Provider
+                </label>
+                <select
+                  value={draftHw.cardTerminalEnabled ? draftHw.cardTerminalProvider : 'disabled'}
+                  onChange={(e) => {
+                    const v = e.target.value;
+                    if (v === 'disabled') {
+                      setDraftHw((h) => ({ ...h, cardTerminalEnabled: false }));
+                    } else {
+                      setDraftHw((h) => ({
+                        ...h,
+                        cardTerminalEnabled: true,
+                        cardTerminalProvider: v as PosHardwareConfig['cardTerminalProvider'],
+                      }));
+                    }
+                  }}
+                  className="mt-1 w-full rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-slate-900 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-100"
+                >
+                  <option value="pesapal_sabi">Pesapal Sabi Android PDQ</option>
+                  <option value="ingenico_ecr">Ingenico Move / Desk EMV</option>
+                  <option value="verifone_ecr">Verifone VX / T650c</option>
+                  <option value="kcb_pdq">KCB Merchant PDQ</option>
+                  <option value="custom_emv">Custom EMV Terminal</option>
+                  <option value="disabled">Disabled</option>
+                </select>
+              </div>
+
+              <div>
+                <label className="block font-medium text-slate-700 dark:text-slate-300">
+                  Assigned PDQ Terminal ID (TID)
+                </label>
+                <input
+                  type="text"
+                  value={draftHw.cardTerminalId || ''}
+                  onChange={(e) =>
+                    setDraftHw((h) => ({ ...h, cardTerminalId: e.target.value }))
+                  }
+                  placeholder="e.g. TID-KE-88401"
+                  className="mt-1 w-full rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 font-mono text-slate-900 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-100"
+                />
+              </div>
+            </div>
+
+            <div className="flex flex-wrap gap-5 border-t border-slate-100 pt-3 text-xs dark:border-slate-800">
+              <label className="inline-flex items-center gap-2 text-slate-700 dark:text-slate-300">
+                <input
+                  type="checkbox"
+                  checked={draftHw.cashDrawerEnabled}
+                  onChange={(e) =>
+                    setDraftHw((h) => ({ ...h, cashDrawerEnabled: e.target.checked }))
+                  }
+                  className="rounded border-slate-300 text-teal-700"
+                />
+                <span>Enable RJ11 Cash Drawer Kick (`ESC p 0`)</span>
+              </label>
+              <label className="inline-flex items-center gap-2 text-slate-700 dark:text-slate-300">
+                <input
+                  type="checkbox"
+                  checked={draftHw.autoOpenDrawerOnCash}
+                  onChange={(e) =>
+                    setDraftHw((h) => ({ ...h, autoOpenDrawerOnCash: e.target.checked }))
+                  }
+                  className="rounded border-slate-300 text-teal-700"
+                />
+                <span>Auto-open Cash Drawer on Cash Sale Completion</span>
+              </label>
+            </div>
+
+            <div className="flex justify-end border-t border-slate-100 pt-4 dark:border-slate-800">
+              <button
+                type="submit"
+                disabled={saving}
+                className="rounded-lg bg-teal-700 px-4 py-2 text-xs font-semibold text-white hover:bg-teal-800 disabled:opacity-50 dark:bg-teal-600"
+              >
+                {saving ? 'Saving...' : 'Save Hardware & PDQ Settings'}
+              </button>
+            </div>
+          </form>
+
+          {/* Right: Live Hardware Pairing & Test Bench */}
+          <section className="space-y-4 rounded-xl border border-slate-200 bg-white p-5 lg:col-span-5 dark:border-slate-800 dark:bg-slate-900">
+            <div className="flex items-center gap-2 border-b border-slate-100 pb-3 dark:border-slate-800">
+              <Usb className="h-4 w-4 text-teal-700 dark:text-teal-400" />
+              <h2 className="font-display text-sm font-semibold text-slate-900 dark:text-slate-100">
+                Device Pairing &amp; Diagnostics
+              </h2>
+            </div>
+
+            {hwStatusMsg && (
+              <div className="rounded-lg border border-teal-200 bg-teal-50 px-3 py-2 text-xs font-medium text-teal-800 dark:border-teal-900 dark:bg-teal-950/40 dark:text-teal-300">
+                {hwStatusMsg}
+              </div>
+            )}
+
+            <div className="space-y-2.5 text-xs">
+              <button
+                type="button"
+                onClick={async () => {
+                  if (draftHw.printerConnection === 'webserial_escpos') {
+                    const res = await pairSerialPeripheral(9600);
+                    setPairedDeviceName(res.label);
+                    setHwStatusMsg(res.ok ? `Paired ${res.label}.` : res.label);
+                  } else {
+                    const res = await pairUsbThermalPrinter();
+                    setPairedDeviceName(res.label);
+                    setHwStatusMsg(res.ok ? `Paired ${res.label}.` : res.label);
+                  }
+                }}
+                className="flex w-full items-center justify-between rounded-lg border border-slate-200 bg-slate-50 px-3.5 py-2.5 font-medium text-slate-800 hover:bg-slate-100 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-200"
+              >
+                <span className="inline-flex items-center gap-2">
+                  <Usb className="h-4 w-4 text-teal-700 dark:text-teal-400" />
+                  <span>Pair Thermal Printer (WebUSB / WebSerial)</span>
+                </span>
+                <span className="font-mono text-[11px] text-slate-500">
+                  {pairedDeviceName || 'Click to Pair'}
+                </span>
+              </button>
+
+              <button
+                type="button"
+                onClick={async () => {
+                  const nowIso = new Date().toISOString();
+                  const sampleBytes = buildEscPosReceiptBytes({
+                    businessName: business.name,
+                    taxPin: business.taxPin,
+                    receiptHeader: business.posConfig.receiptHeader,
+                    receiptFooter: business.posConfig.receiptFooter,
+                    charsPerLine: draftHw.printerPaperChars,
+                    tx: {
+                      id: 'diag-test',
+                      receiptNo: 'TEST-ESC-001',
+                      businessId: business.id,
+                      storeId: activeStore.id,
+                      storeName: activeStore.name,
+                      cashierRole: 'Owner',
+                      cashierName: 'Hardware Test',
+                      customerName: 'Diagnostic Print',
+                      channel: 'POS',
+                      paymentMethod: 'Diagnostic Print',
+                      paymentRef: 'ESC-TEST',
+                      currency: business.currency,
+                      subtotal: 86.21,
+                      taxAmount: 13.79,
+                      discountTotal: 0,
+                      total: 100,
+                      amountTendered: 100,
+                      changeDue: 0,
+                      etimsCuin: 'DIAG-CUIN-001',
+                      etimsStatus: 'Transmitted',
+                      etimsQrData: 'TEST',
+                      lines: [
+                        {
+                          productId: 'diag-sku',
+                          sku: 'DIAG-01',
+                          name: 'ESC/POS Hardware Diagnostics Line',
+                          qty: 1,
+                          unitPrice: 100,
+                          discountPct: 0,
+                          taxCode: 'B_16',
+                          lineTotal: 100,
+                        },
+                      ],
+                      createdAt: nowIso,
+                    },
+                  });
+                  const res = await dispatchHardwareBytes(sampleBytes, draftHw);
+                  const msg = `Dispatched ${res.byteCount} ESC/POS bytes via ${res.dispatchedVia}`;
+                  setHwStatusMsg(msg);
+                  if (onHardwareLog) {
+                    await onHardwareLog('Thermal Test Print', `${draftHw.printerConnection} (${msg})`);
+                  }
+                }}
+                className="flex w-full items-center justify-between rounded-lg border border-slate-200 bg-slate-50 px-3.5 py-2.5 font-medium text-slate-800 hover:bg-slate-100 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-200"
+              >
+                <span className="inline-flex items-center gap-2">
+                  <Printer className="h-4 w-4 text-sky-700 dark:text-sky-400" />
+                  <span>Print ESC/POS Receipt Test</span>
+                </span>
+                <span className="font-mono text-[11px] text-slate-500">
+                  {draftHw.printerPaperChars === 32 ? '58mm' : '80mm'} ({draftHw.printerPaperChars}c)
+                </span>
+              </button>
+
+              <button
+                type="button"
+                onClick={async () => {
+                  const res = await dispatchHardwareBytes(buildCashDrawerKickBytes(), draftHw);
+                  const msg = `Triggered RJ11 pulse (${res.byteCount} bytes via ${res.dispatchedVia})`;
+                  setHwStatusMsg(`Cash Drawer Kick: ${msg}`);
+                  if (onHardwareLog) {
+                    await onHardwareLog('Cash Drawer Kick Test', `Pin-2 RJ11 pulse via ${draftHw.printerConnection}`);
+                  }
+                }}
+                className="flex w-full items-center justify-between rounded-lg border border-slate-200 bg-slate-50 px-3.5 py-2.5 font-medium text-slate-800 hover:bg-slate-100 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-200"
+              >
+                <span className="inline-flex items-center gap-2">
+                  <CreditCard className="h-4 w-4 text-amber-700 dark:text-amber-400" />
+                  <span>Test RJ11 Cash Drawer Kick Pulse</span>
+                </span>
+                <span className="font-mono text-[11px] text-slate-500">ESC p 0</span>
+              </button>
+
+              <div className="rounded-lg border border-slate-200 bg-slate-50/70 p-3 dark:border-slate-800 dark:bg-slate-800/40">
+                <div className="flex items-center gap-2 font-semibold text-slate-800 dark:text-slate-200">
+                  <ScanBarcode className="h-4 w-4 text-teal-700 dark:text-teal-400" />
+                  <span>Barcode Wedge &amp; EMV Card PDQ Ready</span>
+                </div>
+                <p className="mt-1 text-[11px] text-slate-500 dark:text-slate-400">
+                  USB/Bluetooth HID scanners automatically add items on the Counter POS screen without clicking the search bar. Card gateways route directly to{' '}
+                  <span className="font-mono font-semibold text-slate-700 dark:text-slate-200">
+                    {draftHw.cardTerminalProvider} ({draftHw.cardTerminalId || 'Unassigned'})
+                  </span>.
+                </p>
               </div>
             </div>
           </section>

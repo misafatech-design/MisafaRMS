@@ -48,6 +48,7 @@ const ROLES: UserRole[] = [
   'Cashier',
   'Inventory Clerk',
   'Accountant',
+  'HR Officer',
   'Field Agent',
 ];
 

@@ -30,6 +30,11 @@ import {
   SEED_TRANSACTIONS,
 } from './src/data/seedData';
 import {
+  DEFAULT_POS_HARDWARE_CONFIG,
+  getDefaultModulesForRole,
+  getIndustryTemplateById,
+} from './src/data/businessTemplates';
+import {
   AuditLogEntry,
   BackupSnapshot,
   BusinessEntity,
@@ -287,15 +292,22 @@ const ROLE_MAX_DISCOUNT: Record<UserRole, number> = {
   Cashier: 5,
   'Inventory Clerk': 0,
   Accountant: 0,
+  'HR Officer': 0,
   'Field Agent': 10,
 };
 
 function isValidRole(role: unknown): role is UserRole {
   return (
     typeof role === 'string' &&
-    ['Owner', 'Store Manager', 'Cashier', 'Inventory Clerk', 'Accountant', 'Field Agent'].includes(
-      role
-    )
+    [
+      'Owner',
+      'Store Manager',
+      'Cashier',
+      'Inventory Clerk',
+      'Accountant',
+      'HR Officer',
+      'Field Agent',
+    ].includes(role)
   );
 }
 
@@ -461,7 +473,14 @@ async function startServer() {
     )
       ? req.body.subscriptionPlan
       : 'Trial';
-    const setupMode: 'clean' | 'starter' = req.body?.setupMode === 'starter' ? 'starter' : 'clean';
+    const rawTemplateId = sanitizeText(req.body?.templateId, 40);
+    const setupMode: 'clean' | 'starter' =
+      req.body?.setupMode === 'starter' || (rawTemplateId && rawTemplateId !== 'custom')
+        ? 'starter'
+        : 'clean';
+    const template = getIndustryTemplateById(
+      rawTemplateId || (setupMode === 'starter' ? 'supermarket' : 'custom')
+    );
     const ownerPin = sanitizeText(req.body?.ownerPin, 8).replace(/[^0-9]/g, '') || '1234';
     const ecommerceEnabled = Boolean(req.body?.ecommerceEnabled);
     const planMeta =
@@ -473,6 +492,7 @@ async function startServer() {
     }
 
     const bizId = `biz-${crypto.randomUUID().slice(0, 8)}`;
+    const storeId = `store-${crypto.randomUUID().slice(0, 8)}`;
     const requestedSlug = sanitizeText(req.body?.slug, 64);
     const check = evaluateSlugAvailability(requestedSlug || name, name);
     if (!check.available) {
@@ -490,28 +510,30 @@ async function startServer() {
       .toISOString()
       .slice(0, 10);
 
-    // Real businesses in 'clean' mode start with payment gateways disabled until configured,
-    // zero fake promos, and zero fake tables/shelves.
-    const initialGateways =
-      setupMode === 'starter'
-        ? structuredClone(DEFAULT_PAYMENT_GATEWAYS)
-        : structuredClone(DEFAULT_PAYMENT_GATEWAYS).map((gw) => ({
-            ...gw,
-            enabled: false,
-            shortcodeOrTill: gw.mode === 'Cash Drawer' ? 'DRAWER-01' : '',
-          }));
+    // Template-driven gateways: enable starter Cash/M-Pesa/Card rails only when template enables them
+    const initialGateways = structuredClone(DEFAULT_PAYMENT_GATEWAYS).map((gw) => ({
+      ...gw,
+      enabled: template.enableStarterGateways ? gw.enabled : false,
+      shortcodeOrTill: template.enableStarterGateways
+        ? gw.shortcodeOrTill
+        : gw.mode === 'Cash Drawer'
+          ? 'DRAWER-01'
+          : '',
+    }));
 
-    const initialLayout =
-      setupMode === 'starter'
-        ? structuredClone(DEFAULT_LAYOUT_CONFIG)
-        : {
-            layoutMode: 'retail_shelves' as const,
-            zoneLabel: 'Store Section',
-            slotLabel: 'Shelf / Rack',
-            autoMarkTableNeedsClearing: false,
-            showShelfOnPosTile: true,
-            zones: [],
-          };
+    // Bind spatial zones to the new branch storeId
+    const initialLayout = {
+      ...structuredClone(template.layoutConfig),
+      zones: template.layoutConfig.zones.map((z, idx) => ({
+        ...structuredClone(z),
+        id: `zone-${bizId.slice(-4)}-${idx + 1}`,
+        storeId,
+        slots: z.slots.map((sl, sIdx) => ({
+          ...structuredClone(sl),
+          id: `slot-${bizId.slice(-4)}-${idx + 1}-${sIdx + 1}`,
+        })),
+      })),
+    };
 
     const newBiz: BusinessEntity = {
       id: bizId,
@@ -538,41 +560,30 @@ async function startServer() {
       deliveryFee: 0,
       freeDeliveryAbove: 0,
       storefrontPickupEnabled: true,
-      installedModuleIds: [
-        'pos',
-        'pos_settings',
-        'inventory',
-        'invoicing',
-        'accounting',
-        'purchase',
-        'sales',
-        'crm',
-        'employees',
-        'payroll',
-        'etims',
-        'analytics',
-        'field_service',
-        'payment_gateways',
-        'security',
-        'studio',
-        'ecommerce',
-        'online_orders',
-        'website',
-        'backups',
-      ],
+      templateId: template.id,
+      installedModuleIds: [...template.installedModuleIds],
       posConfig: {
         ...structuredClone(DEFAULT_POS_CONFIG),
+        gridDensity: template.posGridDensity,
         receiptHeader: `${name.toUpperCase()} · ${etimsEnabled ? 'KRA eTIMS FISCAL RECEIPT' : 'OFFICIAL RECEIPT'}`,
         receiptFooter: `Thank you for shopping at ${name}.`,
       },
+      hardwareConfig: {
+        ...structuredClone(DEFAULT_POS_HARDWARE_CONFIG),
+        ...structuredClone(template.hardwareDefaults),
+      },
+      supportAccess: {
+        status: 'none',
+        allowPiiView: false,
+        allowWorkspaceEnter: false,
+      },
       paymentGateways: initialGateways,
       layoutConfig: initialLayout,
-      catalogTaxonomy: setupMode === 'starter' ? structuredClone(DEFAULT_CATALOG_TAXONOMY) : [],
-      offers: setupMode === 'starter' ? structuredClone(DEFAULT_PROMO_OFFERS) : [],
+      catalogTaxonomy: structuredClone(template.catalogTaxonomy),
+      offers: structuredClone(template.offers),
       createdAt: now.toISOString(),
     };
 
-    const storeId = `store-${crypto.randomUUID().slice(0, 8)}`;
     const newStore: StoreBranch = {
       id: storeId,
       businessId: bizId,
@@ -607,31 +618,43 @@ async function startServer() {
           canViewEtims: true,
           canExportReports: true,
           canManagePayments: true,
+          allowedModuleIds: getDefaultModulesForRole('Owner'),
         },
         createdAt: now.toISOString(),
       },
     ];
 
-    const starterProducts: ProductItem[] =
-      setupMode === 'starter'
-        ? [
-            {
-              id: `prod-${crypto.randomUUID().slice(0, 8)}`,
-              businessId: bizId,
-              sku: 'STR-COF-001',
-              barcode: `6169${Math.floor(10000000 + Math.random() * 89999999)}`,
-              name: 'Signature Roast Coffee 340g',
-              category: 'Beverages',
-              price: newBiz.currency === 'KES' ? 1200 : 14,
-              cost: newBiz.currency === 'KES' ? 750 : 7,
-              taxCode: 'B_16',
-              unit: 'Pouch',
-              reorderPoint: 15,
-              imageUrl: '/src/assets/images/pos_coffee_beans_1795366673842.jpg',
-              stockByStore: { [storeId]: 50 },
-            },
-          ]
-        : [];
+    const currencyMultiplier =
+      newBiz.currency === 'KES'
+        ? 1
+        : newBiz.currency === 'UGX'
+          ? 28
+          : newBiz.currency === 'TZS'
+            ? 20
+            : 0.008;
+
+    const starterProducts: ProductItem[] = template.starterProducts.map((sp) => {
+      const firstZone = initialLayout.zones[0];
+      const firstSlot = firstZone?.slots[0];
+      return {
+        id: `prod-${crypto.randomUUID().slice(0, 8)}`,
+        businessId: bizId,
+        sku: sp.sku,
+        barcode: `6169${Math.floor(10000000 + Math.random() * 89999999)}`,
+        name: sp.name,
+        category: sp.category,
+        subCategory: sp.subCategory,
+        zoneId: firstZone?.id,
+        slotId: firstSlot?.id,
+        shelfCode: firstSlot ? `${firstSlot.code} · ${firstZone.name}` : undefined,
+        price: Math.max(1, Math.round(sp.priceKes * currencyMultiplier * 100) / 100),
+        cost: Math.max(0, Math.round(sp.costKes * currencyMultiplier * 100) / 100),
+        taxCode: sp.taxCode,
+        unit: sp.unit,
+        reorderPoint: 10,
+        stockByStore: { [storeId]: sp.initialQty },
+      };
+    });
 
     const ownerUser: PlatformUserRecord = {
       id: `usr-${crypto.randomUUID().slice(0, 8)}`,
@@ -710,6 +733,12 @@ async function startServer() {
     if (req.body?.posConfig && typeof req.body.posConfig === 'object') {
       biz.posConfig = { ...biz.posConfig, ...req.body.posConfig };
     }
+    if (req.body?.hardwareConfig && typeof req.body.hardwareConfig === 'object') {
+      biz.hardwareConfig = {
+        ...(biz.hardwareConfig || structuredClone(DEFAULT_POS_HARDWARE_CONFIG)),
+        ...req.body.hardwareConfig,
+      };
+    }
     if (Array.isArray(req.body?.paymentGateways)) {
       biz.paymentGateways = req.body.paymentGateways.slice(0, 20);
     }
@@ -739,6 +768,172 @@ async function startServer() {
     });
     saveDatabase();
 
+    res.json({ business: biz });
+  });
+
+  // Apply an Industry Template to an existing business
+  app.post('/api/businesses/:id/apply-template', (req: Request, res: Response) => {
+    const biz = db.businesses.find((b) => b.id === req.params.id);
+    if (!biz) {
+      res.status(404).json({ error: 'Business not found.' });
+      return;
+    }
+    const templateId = sanitizeText(req.body?.templateId, 40);
+    const seedStarterProducts = Boolean(req.body?.seedStarterProducts);
+    const template = getIndustryTemplateById(templateId);
+    const primaryStore = db.stores.find((s) => s.businessId === biz.id);
+    const targetStoreId = primaryStore?.id || 'store-main';
+
+    biz.templateId = template.id;
+    biz.installedModuleIds = Array.from(
+      new Set([...biz.installedModuleIds, ...template.installedModuleIds])
+    );
+    biz.posConfig = { ...biz.posConfig, gridDensity: template.posGridDensity };
+    biz.hardwareConfig = {
+      ...(biz.hardwareConfig || structuredClone(DEFAULT_POS_HARDWARE_CONFIG)),
+      ...structuredClone(template.hardwareDefaults),
+    };
+    biz.catalogTaxonomy = structuredClone(template.catalogTaxonomy);
+    biz.offers = structuredClone(template.offers);
+    biz.layoutConfig = {
+      ...structuredClone(template.layoutConfig),
+      zones: template.layoutConfig.zones.map((z, idx) => ({
+        ...structuredClone(z),
+        id: `zone-${biz.id.slice(-4)}-${Date.now().toString(36)}-${idx + 1}`,
+        storeId: targetStoreId,
+        slots: z.slots.map((sl, sIdx) => ({
+          ...structuredClone(sl),
+          id: `slot-${biz.id.slice(-4)}-${idx + 1}-${sIdx + 1}`,
+        })),
+      })),
+    };
+
+    const createdProducts: ProductItem[] = [];
+    if (seedStarterProducts && template.starterProducts.length > 0) {
+      const existingSkus = new Set(
+        db.products.filter((p) => p.businessId === biz.id).map((p) => p.sku.toLowerCase())
+      );
+      const firstZone = biz.layoutConfig.zones[0];
+      const firstSlot = firstZone?.slots[0];
+      for (const sp of template.starterProducts) {
+        if (existingSkus.has(sp.sku.toLowerCase())) continue;
+        const prod: ProductItem = {
+          id: `prod-${crypto.randomUUID().slice(0, 8)}`,
+          businessId: biz.id,
+          sku: sp.sku,
+          barcode: `6169${Math.floor(10000000 + Math.random() * 89999999)}`,
+          name: sp.name,
+          category: sp.category,
+          subCategory: sp.subCategory,
+          zoneId: firstZone?.id,
+          slotId: firstSlot?.id,
+          shelfCode: firstSlot ? `${firstSlot.code} · ${firstZone.name}` : undefined,
+          price: sp.priceKes,
+          cost: sp.costKes,
+          taxCode: sp.taxCode,
+          unit: sp.unit,
+          reorderPoint: 10,
+          stockByStore: { [targetStoreId]: sp.initialQty },
+        };
+        db.products.push(prod);
+        createdProducts.push(prod);
+      }
+    }
+
+    appendAudit({
+      actor: 'Business Admin',
+      role: 'Owner',
+      action: `Applied "${template.name}" template (${template.catalogTaxonomy.length} categories, ${biz.layoutConfig.zones.length} zones)`,
+      module: 'Business Templates',
+      storeName: primaryStore?.name || biz.name,
+    });
+    saveDatabase();
+    res.json({ business: biz, createdProducts });
+  });
+
+  // Zero-Trust Super Admin Support Access Request & Business Owner Consent
+  app.post('/api/super-admin/businesses/:id/request-access', (req: Request, res: Response) => {
+    const biz = db.businesses.find((b) => b.id === req.params.id);
+    if (!biz) {
+      res.status(404).json({ error: 'Business not found.' });
+      return;
+    }
+    const requestedByEmail = sanitizeText(req.body?.requestedByEmail, 160) || 'superadmin@misafarms.com';
+    const reason = sanitizeText(req.body?.reason, 220) || 'Support & diagnostic assistance requested by tenant.';
+    const durationHours = Math.max(1, Math.min(72, Number(req.body?.durationHours) || 4));
+    biz.supportAccess = {
+      status: 'pending_approval',
+      requestedByEmail,
+      requestedAt: new Date().toISOString(),
+      reason,
+      requestedDurationHours: durationHours,
+      allowPiiView: false,
+      allowWorkspaceEnter: false,
+    };
+    appendAudit({
+      actor: requestedByEmail,
+      role: 'Owner',
+      action: `Super Admin requested ${durationHours}h support access to "${biz.name}" (Reason: ${reason}) — awaiting Owner consent`,
+      module: 'Privacy & Consent',
+      storeName: biz.name,
+    });
+    saveDatabase();
+    res.json({ business: biz });
+  });
+
+  app.post('/api/businesses/:id/support-access', (req: Request, res: Response) => {
+    const biz = db.businesses.find((b) => b.id === req.params.id);
+    if (!biz) {
+      res.status(404).json({ error: 'Business not found.' });
+      return;
+    }
+    const decision = req.body?.decision as 'approve' | 'deny' | 'revoke' | 'grant';
+    const actorName = sanitizeText(req.body?.actorName, 80) || biz.ownerName || 'Business Owner';
+    const now = new Date();
+
+    if (decision === 'approve' || decision === 'grant') {
+      const hours = Math.max(
+        1,
+        Math.min(72, Number(req.body?.durationHours) || biz.supportAccess?.requestedDurationHours || 4)
+      );
+      biz.supportAccess = {
+        ...(biz.supportAccess || {}),
+        status: 'approved',
+        requestedByEmail: biz.supportAccess?.requestedByEmail || 'platform-support@misafarms.com',
+        reason: biz.supportAccess?.reason || sanitizeText(req.body?.reason, 200) || 'Owner-granted support window',
+        approvedBy: actorName,
+        approvedAt: now.toISOString(),
+        expiresAt: new Date(now.getTime() + hours * 3600000).toISOString(),
+        requestedDurationHours: hours,
+        allowPiiView: true,
+        allowWorkspaceEnter: true,
+      };
+      appendAudit({
+        actor: actorName,
+        role: 'Owner',
+        action: `Owner APPROVED ${hours}h Super Admin support access for "${biz.name}"`,
+        module: 'Privacy & Consent',
+        storeName: biz.name,
+      });
+    } else {
+      biz.supportAccess = {
+        status: 'revoked',
+        requestedByEmail: biz.supportAccess?.requestedByEmail,
+        reason: biz.supportAccess?.reason,
+        revokedAt: now.toISOString(),
+        allowPiiView: false,
+        allowWorkspaceEnter: false,
+      };
+      appendAudit({
+        actor: actorName,
+        role: 'Owner',
+        action: `Owner ${decision === 'deny' ? 'DENIED' : 'REVOKED'} Super Admin support access for "${biz.name}"`,
+        module: 'Privacy & Consent',
+        storeName: biz.name,
+      });
+    }
+
+    saveDatabase();
     res.json({ business: biz });
   });
 
@@ -932,6 +1127,11 @@ async function startServer() {
       return;
     }
 
+    const incomingPerms = req.body?.permissions || {};
+    const sanitizedAllowedModules = Array.isArray(incomingPerms.allowedModuleIds)
+      ? incomingPerms.allowedModuleIds.filter((id: unknown) => typeof id === 'string').slice(0, 80)
+      : getDefaultModulesForRole(role);
+
     const emp: EmployeeRecord = {
       id: `emp-${crypto.randomUUID().slice(0, 8)}`,
       businessId,
@@ -942,15 +1142,40 @@ async function startServer() {
       branchId: branchId || db.stores.find((s) => s.businessId === businessId)?.id || 'store-nbo-cbd',
       grossSalary,
       active: true,
-      permissions: req.body?.permissions || {
-        maxDiscountPct: ROLE_MAX_DISCOUNT[role],
-        canVoidSale: role === 'Owner' || role === 'Store Manager',
-        canOpenDrawer: role === 'Cashier' || role === 'Store Manager' || role === 'Owner',
-        canViewCostPrice: role !== 'Cashier' && role !== 'Field Agent',
-        canEditInventory: role === 'Owner' || role === 'Store Manager' || role === 'Inventory Clerk',
-        canViewEtims: role === 'Owner' || role === 'Store Manager' || role === 'Accountant',
-        canExportReports: role === 'Owner' || role === 'Store Manager' || role === 'Accountant',
-        canManagePayments: role === 'Owner',
+      permissions: {
+        maxDiscountPct:
+          typeof incomingPerms.maxDiscountPct === 'number'
+            ? incomingPerms.maxDiscountPct
+            : ROLE_MAX_DISCOUNT[role],
+        canVoidSale:
+          typeof incomingPerms.canVoidSale === 'boolean'
+            ? incomingPerms.canVoidSale
+            : role === 'Owner' || role === 'Store Manager',
+        canOpenDrawer:
+          typeof incomingPerms.canOpenDrawer === 'boolean'
+            ? incomingPerms.canOpenDrawer
+            : role === 'Cashier' || role === 'Store Manager' || role === 'Owner',
+        canViewCostPrice:
+          typeof incomingPerms.canViewCostPrice === 'boolean'
+            ? incomingPerms.canViewCostPrice
+            : role !== 'Cashier' && role !== 'Field Agent' && role !== 'HR Officer',
+        canEditInventory:
+          typeof incomingPerms.canEditInventory === 'boolean'
+            ? incomingPerms.canEditInventory
+            : role === 'Owner' || role === 'Store Manager' || role === 'Inventory Clerk',
+        canViewEtims:
+          typeof incomingPerms.canViewEtims === 'boolean'
+            ? incomingPerms.canViewEtims
+            : role === 'Owner' || role === 'Store Manager' || role === 'Accountant',
+        canExportReports:
+          typeof incomingPerms.canExportReports === 'boolean'
+            ? incomingPerms.canExportReports
+            : role === 'Owner' || role === 'Store Manager' || role === 'Accountant' || role === 'HR Officer',
+        canManagePayments:
+          typeof incomingPerms.canManagePayments === 'boolean'
+            ? incomingPerms.canManagePayments
+            : role === 'Owner',
+        allowedModuleIds: sanitizedAllowedModules,
       },
       createdAt: new Date().toISOString(),
     };
@@ -976,7 +1201,7 @@ async function startServer() {
     appendAudit({
       actor: 'Business Admin',
       role: 'Owner',
-      action: `Provisioned Employee "${emp.name}" (${emp.role}, PIN ****)`,
+      action: `Provisioned Employee "${emp.name}" (${emp.role}, ${sanitizedAllowedModules.length} apps permitted)`,
       module: 'Employees',
       storeName: 'HR Directory',
     });
@@ -1014,12 +1239,21 @@ async function startServer() {
       emp.active = req.body.active;
     }
     if (req.body?.permissions && typeof req.body.permissions === 'object') {
-      emp.permissions = { ...emp.permissions, ...req.body.permissions };
+      const nextAllowed = Array.isArray(req.body.permissions.allowedModuleIds)
+        ? req.body.permissions.allowedModuleIds
+            .filter((id: unknown) => typeof id === 'string')
+            .slice(0, 80)
+        : emp.permissions.allowedModuleIds;
+      emp.permissions = {
+        ...emp.permissions,
+        ...req.body.permissions,
+        allowedModuleIds: nextAllowed,
+      };
     }
     appendAudit({
       actor: 'HR Admin',
       role: 'Owner',
-      action: `Updated employee profile & permissions for ${emp.name} (${emp.role})`,
+      action: `Updated employee profile & app permissions for ${emp.name} (${emp.role})`,
       module: 'Employees',
       storeName: db.stores.find((s) => s.id === emp.branchId)?.name || 'HR Directory',
     });
@@ -2917,6 +3151,92 @@ async function startServer() {
       payrollRuns: db.payrollRuns,
       erpRecords: db.erpRecords,
     });
+  });
+
+  // --- POS HARDWARE PERIPHERALS & EMV CARD TERMINAL (PDQ) ---
+  app.post('/api/pos/card-terminal/charge', (req: Request, res: Response) => {
+    const businessId = sanitizeText(req.body?.businessId, 60);
+    const storeId = sanitizeText(req.body?.storeId, 60);
+    const provider = sanitizeText(req.body?.provider, 60) || 'Pesapal Sabi PDQ';
+    const terminalId = sanitizeText(req.body?.terminalId, 60) || 'PDQ-01';
+    const cardLast4 = sanitizeText(req.body?.cardLast4, 4).replace(/[^0-9]/g, '') || '4821';
+    const schemeInput = sanitizeText(req.body?.cardScheme, 20);
+    const cardScheme: 'VISA' | 'MASTERCARD' | 'AMEX' = ['VISA', 'MASTERCARD', 'AMEX'].includes(schemeInput)
+      ? (schemeInput as 'VISA' | 'MASTERCARD' | 'AMEX')
+      : 'VISA';
+    const cvmInput = sanitizeText(req.body?.cvmMethod, 30);
+    const cvmMethod: 'NFC Contactless' | 'EMV Chip + PIN' =
+      cvmInput === 'EMV Chip + PIN' ? 'EMV Chip + PIN' : 'NFC Contactless';
+    const amount = Number(req.body?.amount) || 0;
+    const currency = sanitizeText(req.body?.currency, 8) || 'KES';
+
+    const biz = db.businesses.find((b) => b.id === businessId);
+    if (!biz) {
+      res.status(404).json({ error: 'Business not found for card PDQ charge.' });
+      return;
+    }
+    if (amount <= 0) {
+      res.status(400).json({ error: 'Card charge amount must exceed 0.' });
+      return;
+    }
+    const cardGw = biz.paymentGateways.find(
+      (g) => g.enabled && (g.provider === 'pesapal_card' || /card|pdq|visa|pesapal|stripe/i.test(g.mode + g.displayName))
+    );
+    if (!cardGw) {
+      res.status(400).json({ error: 'No Card / PDQ Payment Gateway is enabled for this business.' });
+      return;
+    }
+
+    const authCode = `AUTH-${crypto.randomBytes(3).toString('hex').toUpperCase()}`;
+    const rrn = `RRN${Date.now().toString().slice(-9)}`;
+    const aid = cardScheme === 'MASTERCARD' ? 'A0000000041010' : 'A0000000031010';
+    const storeName = db.stores.find((s) => s.id === storeId)?.name || biz.name;
+
+    appendAudit({
+      actor: terminalId,
+      role: 'Cashier',
+      action: `EMV Card Approved via ${provider} (${cardScheme} •••• ${cardLast4}, ${cvmMethod}) · ${currency} ${amount.toFixed(2)} · Auth ${authCode}`,
+      module: 'POS Card PDQ',
+      storeName,
+    });
+    saveDatabase();
+
+    res.json({
+      approved: true,
+      authCode,
+      rrn,
+      maskedPan: `•••• •••• •••• ${cardLast4}`,
+      cardScheme,
+      cvmMethod,
+      aid,
+      terminalId,
+      provider,
+      amount,
+      currency,
+      timestamp: new Date().toISOString(),
+    });
+  });
+
+  app.post('/api/pos/hardware/log', (req: Request, res: Response) => {
+    const businessId = sanitizeText(req.body?.businessId, 60);
+    const storeId = sanitizeText(req.body?.storeId, 60);
+    const actor = sanitizeText(req.body?.actor, 80) || 'Cashier';
+    const role: UserRole = isValidRole(req.body?.role) ? req.body.role : 'Cashier';
+    const event = sanitizeText(req.body?.event, 80) || 'drawer_kick';
+    const detail = sanitizeText(req.body?.detail, 200) || 'Hardware pulse dispatched';
+
+    const store = db.stores.find((s) => s.id === storeId);
+    const biz = db.businesses.find((b) => b.id === businessId);
+
+    appendAudit({
+      actor,
+      role,
+      action: `POS Hardware (${event}): ${detail}`,
+      module: 'POS Hardware',
+      storeName: store?.name || biz?.name || 'POS Register',
+    });
+    saveDatabase();
+    res.json({ logged: true });
   });
 
   if (process.env.NODE_ENV !== 'production') {

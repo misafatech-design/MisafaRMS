@@ -3,18 +3,27 @@ import {
   Building2,
   CheckCircle2,
   ChevronDown,
+  ChevronLeft,
   ChevronRight,
+  Clock,
   CreditCard,
   ExternalLink,
   Globe,
   KeyRound,
+  LayoutDashboard,
+  Layers,
+  Lock,
   Plus,
   Receipt,
   Save,
+  Search,
+  ShieldAlert,
   ShieldCheck,
   Store,
+  Unlock,
   UserPlus,
   Users,
+  X,
 } from 'lucide-react';
 import {
   BusinessEntity,
@@ -27,10 +36,17 @@ import {
   SubscriptionPlanId,
   SubscriptionPlanTier,
   SubscriptionStatus,
-  UserRole,
 } from '../types/erp';
+import { BUSINESS_INDUSTRY_TEMPLATES } from '../data/businessTemplates';
 
-type SuperAdminTab = 'businesses' | 'users' | 'subscriptions' | 'payment_config';
+type SuperAdminSection =
+  | 'overview'
+  | 'businesses'
+  | 'access_requests'
+  | 'users'
+  | 'templates'
+  | 'subscriptions'
+  | 'payment_config';
 
 interface SuperAdminViewProps {
   businesses: BusinessEntity[];
@@ -43,6 +59,11 @@ interface SuperAdminViewProps {
   subscriptionInvoices: SubscriptionInvoice[];
   currentUserEmail?: string | null;
   onSwitchToBusiness: (businessId: string) => void;
+  onRequestSupportAccess: (
+    businessId: string,
+    reason: string,
+    durationHours: number
+  ) => Promise<void>;
   onUpdateBusinessSubscription: (
     businessId: string,
     patch: {
@@ -89,6 +110,14 @@ interface SuperAdminViewProps {
   onOpenNewBusinessWizard: () => void;
 }
 
+const PAGE_SIZE = 8;
+
+function isSupportAccessActive(biz: BusinessEntity): boolean {
+  if (biz.supportAccess?.status !== 'approved') return false;
+  if (!biz.supportAccess.expiresAt) return true;
+  return new Date(biz.supportAccess.expiresAt).getTime() > Date.now();
+}
+
 export const SuperAdminView: React.FC<SuperAdminViewProps> = ({
   businesses,
   stores,
@@ -100,6 +129,7 @@ export const SuperAdminView: React.FC<SuperAdminViewProps> = ({
   subscriptionInvoices,
   currentUserEmail,
   onSwitchToBusiness,
+  onRequestSupportAccess,
   onUpdateBusinessSubscription,
   onAddBranchToBusiness,
   onCreatePlatformUser,
@@ -109,27 +139,36 @@ export const SuperAdminView: React.FC<SuperAdminViewProps> = ({
   onPaySubscription,
   onOpenNewBusinessWizard,
 }) => {
-  const [activeTab, setActiveTab] = useState<SuperAdminTab>('businesses');
+  const [section, setSection] = useState<SuperAdminSection>('overview');
   const [banner, setBanner] = useState('');
 
-  // Businesses & Branches state
+  // Businesses & Zero-Trust Access state
   const [bizSearch, setBizSearch] = useState('');
-  const [expandedBizId, setExpandedBizId] = useState<string | null>(businesses[0]?.id || null);
+  const [bizStatusFilter, setBizStatusFilter] = useState<'all' | SubscriptionStatus>('all');
+  const [bizPage, setBizPage] = useState(1);
+  const [expandedBizId, setExpandedBizId] = useState<string | null>(null);
   const [branchFormBizId, setBranchFormBizId] = useState<string | null>(null);
   const [newBranchName, setNewBranchName] = useState('');
   const [newBranchLocation, setNewBranchLocation] = useState('');
   const [newBranchTill, setNewBranchTill] = useState('');
 
+  // Support Request Modal state
+  const [accessModalBiz, setAccessModalBiz] = useState<BusinessEntity | null>(null);
+  const [accessReason, setAccessReason] = useState('eTIMS tax & POS register troubleshooting');
+  const [accessDurationHours, setAccessDurationHours] = useState<number>(4);
+  const [submittingAccess, setSubmittingAccess] = useState(false);
+
   // Software Users state
   const [userSearch, setUserSearch] = useState('');
   const [tierFilter, setTierFilter] = useState<'all' | PlatformUserRecord['tier']>('all');
+  const [userPage, setUserPage] = useState(1);
   const [newUserName, setNewUserName] = useState('');
   const [newUserEmail, setNewUserEmail] = useState('');
   const [newUserTier, setNewUserTier] = useState<PlatformUserRecord['tier']>('admin');
   const [newUserRole, setNewUserRole] = useState<PlatformUserRecord['role']>('Owner');
   const [newUserBizId, setNewUserBizId] = useState(businesses[0]?.id || '');
 
-  // Subscription & Checkout state
+  // Subscriptions & Checkout state
   const [editablePlans, setEditablePlans] = useState<SubscriptionPlanTier[]>(subscriptionPlans);
   const [payBizId, setPayBizId] = useState(businesses[0]?.id || '');
   const [payPlanId, setPayPlanId] = useState<SubscriptionPlanId>('Multi-Store Pro');
@@ -168,17 +207,36 @@ export const SuperAdminView: React.FC<SuperAdminViewProps> = ({
   const activeUsersCount = platformUsers.filter((u) => u.status === 'active').length;
   const enabledGatewaysCount = gateways.filter((g) => g.enabled).length;
 
+  const pendingAccessCount = businesses.filter(
+    (b) => b.supportAccess?.status === 'pending_approval'
+  ).length;
+  const activeAccessCount = businesses.filter((b) => isSupportAccessActive(b)).length;
+
+  // Filtered & paginated businesses (zero-trust search never searches masked PII unless approved)
   const filteredBusinesses = useMemo(() => {
     const q = bizSearch.trim().toLowerCase();
-    if (!q) return businesses;
-    return businesses.filter(
-      (b) =>
+    return businesses.filter((b) => {
+      const status = b.subscriptionStatus || 'active';
+      if (bizStatusFilter !== 'all' && status !== bizStatusFilter) return false;
+      if (!q) return true;
+      const consented = isSupportAccessActive(b);
+      return (
         b.name.toLowerCase().includes(q) ||
         b.slug.toLowerCase().includes(q) ||
-        (b.ownerEmail || '').toLowerCase().includes(q)
-    );
-  }, [businesses, bizSearch]);
+        b.country.toLowerCase().includes(q) ||
+        (consented && (b.ownerEmail || '').toLowerCase().includes(q))
+      );
+    });
+  }, [businesses, bizSearch, bizStatusFilter]);
 
+  const totalBizPages = Math.max(1, Math.ceil(filteredBusinesses.length / PAGE_SIZE));
+  const safeBizPage = Math.min(bizPage, totalBizPages);
+  const pagedBusinesses = filteredBusinesses.slice(
+    (safeBizPage - 1) * PAGE_SIZE,
+    safeBizPage * PAGE_SIZE
+  );
+
+  // Filtered & paginated users
   const filteredUsers = useMemo(() => {
     const q = userSearch.trim().toLowerCase();
     return platformUsers.filter((u) => {
@@ -192,6 +250,28 @@ export const SuperAdminView: React.FC<SuperAdminViewProps> = ({
       );
     });
   }, [platformUsers, tierFilter, userSearch]);
+
+  const totalUserPages = Math.max(1, Math.ceil(filteredUsers.length / PAGE_SIZE));
+  const safeUserPage = Math.min(userPage, totalUserPages);
+  const pagedUsers = filteredUsers.slice(
+    (safeUserPage - 1) * PAGE_SIZE,
+    safeUserPage * PAGE_SIZE
+  );
+
+  const handleSubmitAccessRequest = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!accessModalBiz || !accessReason.trim()) return;
+    setSubmittingAccess(true);
+    try {
+      await onRequestSupportAccess(accessModalBiz.id, accessReason.trim(), accessDurationHours);
+      notify(
+        `Support access request sent to ${accessModalBiz.name}'s Business Owner (${accessDurationHours}h window). Awaiting explicit approval.`
+      );
+      setAccessModalBiz(null);
+    } finally {
+      setSubmittingAccess(false);
+    }
+  };
 
   const handleAddUserSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -290,1048 +370,1545 @@ export const SuperAdminView: React.FC<SuperAdminViewProps> = ({
     notify(`Added "${nextGw.displayName}" — click Save SaaS Payment Config to persist.`);
   };
 
+  const navItems: Array<{
+    id: SuperAdminSection;
+    label: string;
+    icon: React.ReactNode;
+    count?: number;
+  }> = [
+    { id: 'overview', label: 'Control Overview', icon: <LayoutDashboard className="h-4 w-4" /> },
+    {
+      id: 'businesses',
+      label: 'Tenants & Branches',
+      icon: <Building2 className="h-4 w-4" />,
+      count: businesses.length,
+    },
+    {
+      id: 'access_requests',
+      label: 'Privacy & Access Queue',
+      icon: <Lock className="h-4 w-4" />,
+      count: pendingAccessCount + activeAccessCount,
+    },
+    {
+      id: 'users',
+      label: 'Software Users',
+      icon: <Users className="h-4 w-4" />,
+      count: platformUsers.length,
+    },
+    {
+      id: 'templates',
+      label: 'Industry Templates',
+      icon: <Layers className="h-4 w-4" />,
+      count: BUSINESS_INDUSTRY_TEMPLATES.length,
+    },
+    {
+      id: 'subscriptions',
+      label: 'Plans & Invoices',
+      icon: <Receipt className="h-4 w-4" />,
+      count: subscriptionInvoices.length,
+    },
+    {
+      id: 'payment_config',
+      label: 'SaaS Billing Gateways',
+      icon: <CreditCard className="h-4 w-4" />,
+      count: enabledGatewaysCount,
+    },
+  ];
+
   return (
-    <div className="space-y-6">
-      {/* Header */}
-      <div className="flex flex-wrap items-end justify-between gap-4">
-        <div>
-          <div className="flex items-center gap-2 text-xs font-semibold text-teal-700 dark:text-teal-400">
+    <div className="flex flex-col gap-6 lg:flex-row lg:items-start">
+      {/* Scalable Enterprise SaaS Left Sidebar */}
+      <aside className="w-full shrink-0 rounded-xl border border-slate-200 bg-white p-3 lg:sticky lg:top-20 lg:w-64 dark:border-slate-800 dark:bg-slate-900">
+        <div className="border-b border-slate-100 px-2 pb-3 dark:border-slate-800">
+          <div className="flex items-center gap-2 text-xs font-bold text-teal-700 dark:text-teal-400">
             <ShieldCheck className="h-4 w-4" />
-            <span>MisafaRMS SaaS Platform Control Plane · {currentUserEmail || 'misafatech@gmail.com'}</span>
+            <span>MisafaRMS Control Plane</span>
           </div>
-          <h1 className="mt-1 font-display text-2xl font-bold tracking-tight text-slate-900 dark:text-slate-100">
-            Super Admin · Tenants, Users, Subscriptions & SaaS Billing
-          </h1>
-          <p className="mt-1 text-sm text-slate-600 dark:text-slate-400">
-            Manage onboarded misafarms.com/&lt;slug&gt; businesses, branch counts, software users, plan billing, and collection gateways.
+          <p className="mt-0.5 truncate font-mono text-[11px] text-slate-500 dark:text-slate-400">
+            {currentUserEmail || 'misafatech@gmail.com'}
           </p>
         </div>
 
-        <button
-          type="button"
-          onClick={onOpenNewBusinessWizard}
-          className="inline-flex items-center gap-1.5 rounded-lg bg-teal-700 px-4 py-2 text-xs font-semibold text-white hover:bg-teal-800 dark:bg-teal-600"
-        >
-          <Plus className="h-3.5 w-3.5" />
-          <span>Onboard New Business</span>
-        </button>
-      </div>
-
-      {banner && (
-        <div className="flex items-center gap-2 rounded-lg border border-emerald-200 bg-emerald-50 px-4 py-2.5 text-xs font-medium text-emerald-800 dark:border-emerald-900 dark:bg-emerald-950/50 dark:text-emerald-300">
-          <CheckCircle2 className="h-4 w-4 shrink-0" />
-          <span>{banner}</span>
-        </div>
-      )}
-
-      {/* 4 KPI Summary Cards */}
-      <section className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
-        <div className="rounded-xl border border-slate-200 bg-white p-4 dark:border-slate-800 dark:bg-slate-900">
-          <div className="flex items-center justify-between text-xs text-slate-500 dark:text-slate-400">
-            <span>Businesses & Branches</span>
-            <Building2 className="h-4 w-4 text-teal-700 dark:text-teal-400" />
-          </div>
-          <p className="mt-2 font-mono text-2xl font-bold tabular-nums text-slate-900 dark:text-slate-100">
-            {activeBusinessesCount} <span className="text-sm font-normal text-slate-400">/ {businesses.length}</span>
-          </p>
-          <p className="mt-1 text-xs text-slate-600 dark:text-slate-400">
-            <span className="font-mono font-semibold text-slate-800 dark:text-slate-200">{totalBranchesCount}</span> active retail branches synced
-          </p>
-        </div>
-
-        <div className="rounded-xl border border-slate-200 bg-white p-4 dark:border-slate-800 dark:bg-slate-900">
-          <div className="flex items-center justify-between text-xs text-slate-500 dark:text-slate-400">
-            <span>Recurring SaaS MRR</span>
-            <Receipt className="h-4 w-4 text-teal-700 dark:text-teal-400" />
-          </div>
-          <p className="mt-2 font-mono text-2xl font-bold tabular-nums text-slate-900 dark:text-slate-100">
-            KES {totalMrrKes.toLocaleString()}
-          </p>
-          <p className="mt-1 text-xs text-slate-600 dark:text-slate-400">
-            {subscriptionInvoices.filter((i) => i.status === 'paid').length} settled ·{' '}
-            {subscriptionInvoices.filter((i) => i.status !== 'paid').length} pending/overdue
-          </p>
-        </div>
-
-        <div className="rounded-xl border border-slate-200 bg-white p-4 dark:border-slate-800 dark:bg-slate-900">
-          <div className="flex items-center justify-between text-xs text-slate-500 dark:text-slate-400">
-            <span>Software Users</span>
-            <Users className="h-4 w-4 text-teal-700 dark:text-teal-400" />
-          </div>
-          <p className="mt-2 font-mono text-2xl font-bold tabular-nums text-slate-900 dark:text-slate-100">
-            {activeUsersCount} <span className="text-sm font-normal text-slate-400">/ {platformUsers.length}</span>
-          </p>
-          <p className="mt-1 text-xs text-slate-600 dark:text-slate-400">
-            Across Super Admin, Tenant Admins, Staff & Portal
-          </p>
-        </div>
-
-        <div className="rounded-xl border border-slate-200 bg-white p-4 dark:border-slate-800 dark:bg-slate-900">
-          <div className="flex items-center justify-between text-xs text-slate-500 dark:text-slate-400">
-            <span>SaaS Collection Gateways</span>
-            <CreditCard className="h-4 w-4 text-teal-700 dark:text-teal-400" />
-          </div>
-          <p className="mt-2 font-mono text-2xl font-bold tabular-nums text-slate-900 dark:text-slate-100">
-            {enabledGatewaysCount} <span className="text-sm font-normal text-slate-400">/ {gateways.length}</span>
-          </p>
-          <p className="mt-1 text-xs text-slate-600 dark:text-slate-400">
-            M-Pesa Daraja, Airtel Money, Pesapal, Stripe & EFT
-          </p>
-        </div>
-      </section>
-
-      {/* Section Navigation Tabs */}
-      <div className="flex flex-wrap items-center gap-2 border-b border-slate-200 pb-3 dark:border-slate-800">
-        {(
-          [
-            { id: 'businesses', label: `Businesses & Branches (${businesses.length})` },
-            { id: 'users', label: `Software Users (${platformUsers.length})` },
-            { id: 'subscriptions', label: `Subscriptions & Invoices (${subscriptionInvoices.length})` },
-            { id: 'payment_config', label: `SaaS Payment Config (${enabledGatewaysCount})` },
-          ] as const
-        ).map((tab) => (
-          <button
-            key={tab.id}
-            type="button"
-            onClick={() => setActiveTab(tab.id)}
-            className={`rounded-lg px-3.5 py-2 text-xs font-semibold transition-colors ${
-              activeTab === tab.id
-                ? 'bg-slate-900 text-white dark:bg-teal-600'
-                : 'border border-slate-200 bg-white text-slate-700 hover:bg-slate-50 dark:border-slate-800 dark:bg-slate-900 dark:text-slate-300'
-            }`}
-          >
-            {tab.label}
-          </button>
-        ))}
-      </div>
-
-      {/* TAB 1: Businesses & Branch Inspection */}
-      {activeTab === 'businesses' && (
-        <div className="space-y-4">
-          <div className="flex flex-wrap items-center justify-between gap-3">
-            <input
-              type="text"
-              value={bizSearch}
-              onChange={(e) => setBizSearch(e.target.value)}
-              placeholder="Search business name, misafarms.com handle, or owner email..."
-              className="w-full max-w-md rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs text-slate-900 focus:border-teal-600 focus:outline-none dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100"
-            />
-            <span className="font-mono text-xs text-slate-500 dark:text-slate-400">
-              Total Branches Platform-Wide: <strong className="text-slate-900 dark:text-slate-100">{totalBranchesCount}</strong>
-            </span>
-          </div>
-
-          <div className="space-y-3">
-            {filteredBusinesses.map((biz) => {
-              const bizBranches = stores.filter((s) => s.businessId === biz.id);
-              const bizStaffCount = employees.filter((e) => e.businessId === biz.id).length;
-              const bizSkuCount = products.filter((p) => p.businessId === biz.id).length;
-              const isExpanded = expandedBizId === biz.id;
-              const branchLimit = biz.branchLimit ?? 5;
-              const status = biz.subscriptionStatus || 'active';
-
-              return (
-                <div
-                  key={biz.id}
-                  className="overflow-hidden rounded-xl border border-slate-200 bg-white dark:border-slate-800 dark:bg-slate-900"
-                >
-                  <div className="flex flex-wrap items-center justify-between gap-4 px-5 py-4">
-                    <div className="flex items-start gap-3">
-                      <button
-                        type="button"
-                        onClick={() => setExpandedBizId(isExpanded ? null : biz.id)}
-                        className="mt-0.5 rounded border border-slate-200 p-1 text-slate-500 hover:bg-slate-100 dark:border-slate-700 dark:hover:bg-slate-800"
-                        aria-label={`Toggle branches for ${biz.name}`}
-                      >
-                        {isExpanded ? <ChevronDown className="h-4 w-4" /> : <ChevronRight className="h-4 w-4" />}
-                      </button>
-
-                      <div>
-                        <div className="flex flex-wrap items-center gap-2">
-                          <h2 className="font-display text-sm font-bold text-slate-900 dark:text-slate-100">
-                            {biz.name}
-                          </h2>
-                          <span className="inline-flex items-center gap-1 rounded bg-slate-100 px-2 py-0.5 font-mono text-[11px] font-medium text-teal-800 dark:bg-slate-800 dark:text-teal-300">
-                            <Globe className="h-3 w-3" />
-                            misafarms.com/{biz.slug}
-                          </span>
-                          <span
-                            className={`rounded px-2 py-0.5 text-[11px] font-semibold capitalize ${
-                              status === 'active'
-                                ? 'bg-emerald-50 text-emerald-700 dark:bg-emerald-950/60 dark:text-emerald-300'
-                                : status === 'trial'
-                                  ? 'bg-sky-50 text-sky-700 dark:bg-sky-950/60 dark:text-sky-300'
-                                  : status === 'past_due'
-                                    ? 'bg-amber-50 text-amber-800 dark:bg-amber-950/60 dark:text-amber-300'
-                                    : 'bg-rose-50 text-rose-700 dark:bg-rose-950/60 dark:text-rose-300'
-                            }`}
-                          >
-                            {status.replace('_', ' ')}
-                          </span>
-                        </div>
-                        <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">
-                          Owner: {biz.ownerName || 'Admin'} ({biz.ownerEmail || 'owner@misafarms.com'}) · Tax PIN:{' '}
-                          <span className="font-mono">{biz.taxPin}</span> · {biz.country} ({biz.currency})
-                        </p>
-                      </div>
-                    </div>
-
-                    {/* Exact Branch Count + Plan Controls */}
-                    <div className="flex flex-wrap items-center gap-3 text-xs">
-                      <button
-                        type="button"
-                        onClick={() => setExpandedBizId(isExpanded ? null : biz.id)}
-                        className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-1.5 text-left hover:border-teal-600 dark:border-slate-700 dark:bg-slate-800"
-                      >
-                        <span className="text-[11px] text-slate-500 dark:text-slate-400">Branches</span>
-                        <div className="font-mono font-bold tabular-nums text-slate-900 dark:text-slate-100">
-                          {bizBranches.length} / {branchLimit >= 999 ? '∞' : branchLimit}
-                        </div>
-                      </button>
-
-                      <div className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-1.5 dark:border-slate-700 dark:bg-slate-800">
-                        <span className="text-[11px] text-slate-500 dark:text-slate-400">Staff / SKUs</span>
-                        <div className="font-mono font-bold tabular-nums text-slate-900 dark:text-slate-100">
-                          {bizStaffCount} · {bizSkuCount}
-                        </div>
-                      </div>
-
-                      <select
-                        aria-label={`Subscription plan for ${biz.name}`}
-                        value={biz.subscriptionPlan || 'Trial'}
-                        onChange={async (e) => {
-                          await onUpdateBusinessSubscription(biz.id, {
-                            subscriptionPlan: e.target.value as SubscriptionPlanId,
-                          });
-                          notify(`Updated ${biz.name} to ${e.target.value} plan.`);
-                        }}
-                        className="rounded-lg border border-slate-200 bg-white px-2.5 py-2 text-xs font-medium text-slate-800 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-200"
-                      >
-                        {subscriptionPlans.map((p) => (
-                          <option key={p.id} value={p.id}>
-                            Plan: {p.name} (KES {p.monthlyPriceKes.toLocaleString()})
-                          </option>
-                        ))}
-                      </select>
-
-                      <button
-                        type="button"
-                        onClick={async () => {
-                          const nextStatus: SubscriptionStatus =
-                            status === 'suspended' ? 'active' : 'suspended';
-                          await onUpdateBusinessSubscription(biz.id, {
-                            subscriptionStatus: nextStatus,
-                          });
-                          notify(
-                            `${biz.name} workspace ${nextStatus === 'suspended' ? 'suspended' : 'reactivated'}.`
-                          );
-                        }}
-                        className={`rounded-lg border px-3 py-2 text-xs font-semibold ${
-                          status === 'suspended'
-                            ? 'border-emerald-300 bg-emerald-50 text-emerald-800 hover:bg-emerald-100 dark:border-emerald-800 dark:bg-emerald-950/50 dark:text-emerald-300'
-                            : 'border-rose-200 bg-white text-rose-700 hover:bg-rose-50 dark:border-rose-900 dark:bg-slate-900 dark:text-rose-400'
-                        }`}
-                      >
-                        {status === 'suspended' ? 'Reactivate' : 'Suspend'}
-                      </button>
-
-                      <button
-                        type="button"
-                        onClick={() => onSwitchToBusiness(biz.id)}
-                        className="inline-flex items-center gap-1 rounded-lg bg-slate-900 px-3 py-2 text-xs font-semibold text-white hover:bg-slate-800 dark:bg-teal-600"
-                      >
-                        <span>Enter Workspace</span>
-                        <ExternalLink className="h-3 w-3" />
-                      </button>
-                    </div>
-                  </div>
-
-                  {/* Expanded Branches Drawer */}
-                  {isExpanded && (
-                    <div className="border-t border-slate-200 bg-slate-50/70 px-5 py-4 dark:border-slate-800 dark:bg-slate-950/40">
-                      <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
-                        <div className="flex items-center gap-2 text-xs font-semibold text-slate-800 dark:text-slate-200">
-                          <Store className="h-4 w-4 text-teal-700 dark:text-teal-400" />
-                          <span>
-                            Registered Store Branches for {biz.name} ({bizBranches.length} of{' '}
-                            {branchLimit >= 999 ? 'Unlimited' : branchLimit} quota)
-                          </span>
-                        </div>
-                        <div className="flex items-center gap-2">
-                          <label className="inline-flex items-center gap-1.5 text-xs text-slate-600 dark:text-slate-400">
-                            <span>Branch Quota:</span>
-                            <input
-                              type="number"
-                              min={1}
-                              max={999}
-                              value={branchLimit}
-                              onChange={async (e) => {
-                                const val = Math.max(1, Number(e.target.value) || 1);
-                                await onUpdateBusinessSubscription(biz.id, { branchLimit: val });
-                              }}
-                              className="w-16 rounded border border-slate-300 bg-white px-2 py-1 font-mono text-xs text-slate-900 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100"
-                            />
-                          </label>
-                          <button
-                            type="button"
-                            onClick={() =>
-                              setBranchFormBizId(branchFormBizId === biz.id ? null : biz.id)
-                            }
-                            className="inline-flex items-center gap-1 rounded-lg border border-teal-700 bg-white px-2.5 py-1 text-xs font-semibold text-teal-800 hover:bg-teal-50 dark:border-teal-600 dark:bg-slate-900 dark:text-teal-300"
-                          >
-                            <Plus className="h-3.5 w-3.5" />
-                            <span>Add Branch</span>
-                          </button>
-                        </div>
-                      </div>
-
-                      {branchFormBizId === biz.id && (
-                        <form
-                          onSubmit={(e) => handleAddBranchSubmit(e, biz.id)}
-                          className="mb-3 grid grid-cols-1 gap-2 rounded-lg border border-slate-200 bg-white p-3 sm:grid-cols-4 dark:border-slate-700 dark:bg-slate-900"
-                        >
-                          <input
-                            type="text"
-                            required
-                            value={newBranchName}
-                            onChange={(e) => setNewBranchName(e.target.value)}
-                            placeholder="Branch Name (e.g. Nakuru CBD)"
-                            className="rounded border border-slate-200 px-2.5 py-1.5 text-xs dark:border-slate-700 dark:bg-slate-800"
-                          />
-                          <input
-                            type="text"
-                            value={newBranchLocation}
-                            onChange={(e) => setNewBranchLocation(e.target.value)}
-                            placeholder="Location / Street"
-                            className="rounded border border-slate-200 px-2.5 py-1.5 text-xs dark:border-slate-700 dark:bg-slate-800"
-                          />
-                          <input
-                            type="text"
-                            value={newBranchTill}
-                            onChange={(e) => setNewBranchTill(e.target.value)}
-                            placeholder="Till / Register Ref"
-                            className="rounded border border-slate-200 px-2.5 py-1.5 font-mono text-xs dark:border-slate-700 dark:bg-slate-800"
-                          />
-                          <button
-                            type="submit"
-                            className="rounded bg-teal-700 px-3 py-1.5 text-xs font-semibold text-white hover:bg-teal-800"
-                          >
-                            Provision Branch
-                          </button>
-                        </form>
-                      )}
-
-                      <div className="grid grid-cols-1 gap-2.5 md:grid-cols-2 lg:grid-cols-3">
-                        {bizBranches.map((br) => (
-                          <div
-                            key={br.id}
-                            className="rounded-lg border border-slate-200 bg-white p-3 text-xs dark:border-slate-800 dark:bg-slate-900"
-                          >
-                            <div className="flex items-center justify-between">
-                              <span className="font-semibold text-slate-900 dark:text-slate-100">
-                                {br.name}
-                              </span>
-                              <span className="font-mono text-[11px] font-semibold text-teal-700 dark:text-teal-400">
-                                {br.code}
-                              </span>
-                            </div>
-                            <p className="mt-1 text-[11px] text-slate-500 dark:text-slate-400">
-                              {br.location} · Register {br.registerId}
-                            </p>
-                            <div className="mt-2 flex flex-wrap items-center justify-between gap-2 border-t border-slate-100 pt-2 font-mono text-[11px] text-slate-600 dark:border-slate-800 dark:text-slate-300">
-                              <span>eTIMS BHF-{br.etimsBhfId}: {br.vscuSerial}</span>
-                              <span>Till {br.tillNumber}</span>
-                            </div>
-                          </div>
-                        ))}
-                      </div>
-                    </div>
-                  )}
-                </div>
-              );
-            })}
-          </div>
-        </div>
-      )}
-
-      {/* TAB 2: Software Users Directory & Provisioning */}
-      {activeTab === 'users' && (
-        <div className="space-y-5">
-          {/* Provision Software User Form */}
-          <form
-            onSubmit={handleAddUserSubmit}
-            className="space-y-3 rounded-xl border border-slate-200 bg-white p-5 dark:border-slate-800 dark:bg-slate-900"
-          >
-            <div className="flex items-center gap-2 text-xs font-semibold text-slate-900 dark:text-slate-100">
-              <UserPlus className="h-4 w-4 text-teal-700 dark:text-teal-400" />
-              <span>Invite or Provision SaaS Software User</span>
-            </div>
-            <div className="grid grid-cols-1 gap-2.5 sm:grid-cols-5">
-              <input
-                type="text"
-                required
-                value={newUserName}
-                onChange={(e) => setNewUserName(e.target.value)}
-                placeholder="Full Name"
-                className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-900 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-100"
-              />
-              <input
-                type="email"
-                required
-                value={newUserEmail}
-                onChange={(e) => setNewUserEmail(e.target.value)}
-                placeholder="user@company.co.ke"
-                className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-900 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-100"
-              />
-              <select
-                value={newUserTier}
-                onChange={(e) => {
-                  const t = e.target.value as PlatformUserRecord['tier'];
-                  setNewUserTier(t);
-                  if (t === 'super_admin') setNewUserRole('Super Admin');
-                  else if (t === 'admin') setNewUserRole('Owner');
-                  else if (t === 'employee') setNewUserRole('Cashier');
-                  else setNewUserRole('Customer');
-                }}
-                className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-900 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-100"
-              >
-                <option value="super_admin">Tier: Super Admin</option>
-                <option value="admin">Tier: Business Admin</option>
-                <option value="employee">Tier: Employee (Staff)</option>
-                <option value="user">Tier: Portal User</option>
-              </select>
-              <select
-                value={newUserBizId}
-                disabled={newUserTier === 'super_admin'}
-                onChange={(e) => setNewUserBizId(e.target.value)}
-                className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-900 disabled:opacity-50 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-100"
-              >
-                {businesses.map((b) => (
-                  <option key={b.id} value={b.id}>
-                    {b.name} (/{b.slug})
-                  </option>
-                ))}
-              </select>
+        <nav className="mt-2 flex flex-row gap-1 overflow-x-auto pb-1 lg:flex-col lg:overflow-visible lg:pb-0">
+          {navItems.map((item) => {
+            const active = section === item.id;
+            return (
               <button
-                type="submit"
-                className="inline-flex items-center justify-center gap-1.5 rounded-lg bg-teal-700 px-4 py-2 text-xs font-semibold text-white hover:bg-teal-800 dark:bg-teal-600"
+                key={item.id}
+                type="button"
+                onClick={() => setSection(item.id)}
+                className={`flex shrink-0 items-center justify-between gap-2 rounded-lg px-3 py-2 text-xs font-semibold transition-colors ${
+                  active
+                    ? 'bg-slate-900 text-white dark:bg-teal-600'
+                    : 'text-slate-600 hover:bg-slate-100 hover:text-slate-900 dark:text-slate-300 dark:hover:bg-slate-800'
+                }`}
               >
-                <Plus className="h-3.5 w-3.5" />
-                <span>Add Software User</span>
+                <span className="flex items-center gap-2">
+                  {item.icon}
+                  <span>{item.label}</span>
+                </span>
+                {typeof item.count === 'number' && (
+                  <span
+                    className={`font-mono text-[11px] tabular-nums ${
+                      active ? 'text-slate-300 dark:text-teal-100' : 'text-slate-400'
+                    }`}
+                  >
+                    {item.count}
+                  </span>
+                )}
               </button>
-            </div>
-          </form>
+            );
+          })}
+        </nav>
 
-          {/* Users Table */}
-          <section className="rounded-xl border border-slate-200 bg-white dark:border-slate-800 dark:bg-slate-900">
-            <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-200 px-5 py-3.5 dark:border-slate-800">
-              <div className="flex flex-wrap items-center gap-2">
-                <input
-                  type="text"
-                  value={userSearch}
-                  onChange={(e) => setUserSearch(e.target.value)}
-                  placeholder="Filter users by name, email, or tenant..."
-                  className="w-64 rounded-lg border border-slate-200 bg-slate-50 px-3 py-1.5 text-xs dark:border-slate-700 dark:bg-slate-800"
-                />
-                <select
-                  value={tierFilter}
-                  onChange={(e) => setTierFilter(e.target.value as 'all' | PlatformUserRecord['tier'])}
-                  className="rounded-lg border border-slate-200 bg-slate-50 px-2.5 py-1.5 text-xs dark:border-slate-700 dark:bg-slate-800"
-                >
-                  <option value="all">All Access Tiers</option>
-                  <option value="super_admin">Super Admin</option>
-                  <option value="admin">Business Admin</option>
-                  <option value="employee">Staff Employee</option>
-                  <option value="user">Portal Customer</option>
-                </select>
-              </div>
-              <span className="font-mono text-xs text-slate-500">
-                Showing {filteredUsers.length} of {platformUsers.length} accounts
-              </span>
+        <div className="mt-3 hidden border-t border-slate-100 pt-3 lg:block dark:border-slate-800">
+          <div className="rounded-lg bg-slate-50 p-3 text-[11px] text-slate-600 dark:bg-slate-950/60 dark:text-slate-400">
+            <div className="flex items-center gap-1.5 font-semibold text-slate-800 dark:text-slate-200">
+              <Lock className="h-3.5 w-3.5 text-teal-700 dark:text-teal-400" />
+              <span>Zero-Trust Tenant Privacy</span>
             </div>
+            <p className="mt-1 leading-relaxed">
+              Owner PII, tax IDs, and workspace sessions remain encrypted &amp; locked until the Business Owner approves your timed support request.
+            </p>
+          </div>
 
-            <div className="overflow-x-auto">
-              <table className="w-full text-left text-xs">
-                <thead>
-                  <tr className="border-b border-slate-200 text-slate-500 dark:border-slate-800 dark:text-slate-400">
-                    <th className="px-5 py-3 font-medium">User</th>
-                    <th className="px-5 py-3 font-medium">Access Tier</th>
-                    <th className="px-5 py-3 font-medium">Role</th>
-                    <th className="px-5 py-3 font-medium">Assigned Business</th>
-                    <th className="px-5 py-3 font-medium">Status</th>
-                    <th className="px-5 py-3 text-right font-medium">Actions</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
-                  {filteredUsers.map((usr) => (
-                    <tr key={usr.id} className="hover:bg-slate-50 dark:hover:bg-slate-800/40">
-                      <td className="px-5 py-3">
-                        <p className="font-semibold text-slate-900 dark:text-slate-100">{usr.name}</p>
-                        <p className="font-mono text-[11px] text-slate-500">{usr.email}</p>
-                      </td>
-                      <td className="px-5 py-3">
-                        <select
-                          aria-label={`Tier for ${usr.email}`}
-                          value={usr.tier}
-                          onChange={async (e) => {
-                            await onUpdatePlatformUser(usr.id, {
-                              tier: e.target.value as PlatformUserRecord['tier'],
-                            });
-                            notify(`Updated access tier for ${usr.email}.`);
-                          }}
-                          className="rounded border border-slate-200 bg-slate-50 px-2 py-1 text-xs font-medium dark:border-slate-700 dark:bg-slate-800"
-                        >
-                          <option value="super_admin">Super Admin</option>
-                          <option value="admin">Business Admin</option>
-                          <option value="employee">Employee</option>
-                          <option value="user">Portal User</option>
-                        </select>
-                      </td>
-                      <td className="px-5 py-3 text-slate-700 dark:text-slate-300">{usr.role}</td>
-                      <td className="px-5 py-3">
-                        {usr.tier === 'super_admin' ? (
-                          <span className="font-mono text-[11px] text-teal-700 dark:text-teal-400">
-                            Platform Global
-                          </span>
-                        ) : (
-                          <select
-                            aria-label={`Business for ${usr.email}`}
-                            value={usr.businessId || ''}
-                            onChange={async (e) => {
-                              await onUpdatePlatformUser(usr.id, { businessId: e.target.value });
-                              notify(`Reassigned ${usr.email} to new workspace.`);
-                            }}
-                            className="rounded border border-slate-200 bg-slate-50 px-2 py-1 text-xs dark:border-slate-700 dark:bg-slate-800"
-                          >
-                            <option value="">Unassigned</option>
-                            {businesses.map((b) => (
-                              <option key={b.id} value={b.id}>
-                                {b.name} (/{b.slug})
-                              </option>
-                            ))}
-                          </select>
-                        )}
-                      </td>
-                      <td className="px-5 py-3">
-                        <span
-                          className={`rounded px-2 py-0.5 text-[11px] font-semibold capitalize ${
-                            usr.status === 'active'
-                              ? 'bg-emerald-50 text-emerald-700 dark:bg-emerald-950/60 dark:text-emerald-300'
-                              : 'bg-rose-50 text-rose-700 dark:bg-rose-950/60 dark:text-rose-300'
-                          }`}
-                        >
-                          {usr.status}
-                        </span>
-                      </td>
-                      <td className="px-5 py-3 text-right">
-                        <button
-                          type="button"
-                          onClick={async () => {
-                            const nextStatus = usr.status === 'active' ? 'suspended' : 'active';
-                            await onUpdatePlatformUser(usr.id, { status: nextStatus });
-                            notify(`${usr.email} marked ${nextStatus}.`);
-                          }}
-                          className="rounded border border-slate-200 px-2.5 py-1 text-[11px] font-semibold text-slate-700 hover:bg-slate-100 dark:border-slate-700 dark:text-slate-200"
-                        >
-                          {usr.status === 'active' ? 'Suspend' : 'Activate'}
-                        </button>
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          </section>
+          <button
+            type="button"
+            onClick={onOpenNewBusinessWizard}
+            className="mt-3 flex w-full items-center justify-center gap-1.5 rounded-lg bg-teal-700 px-3 py-2 text-xs font-semibold text-white hover:bg-teal-800 dark:bg-teal-600"
+          >
+            <Plus className="h-3.5 w-3.5" />
+            <span>Onboard Business</span>
+          </button>
         </div>
-      )}
+      </aside>
 
-      {/* TAB 3: Subscriptions, Plan Editor & Payment Collection */}
-      {activeTab === 'subscriptions' && (
-        <div className="space-y-6">
-          {/* Editable SaaS Plans Grid */}
-          <section className="rounded-xl border border-slate-200 bg-white p-5 dark:border-slate-800 dark:bg-slate-900">
-            <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-200 pb-3 dark:border-slate-800">
-              <div>
-                <h2 className="font-display text-sm font-bold text-slate-900 dark:text-slate-100">
-                  SaaS Subscription Plans & Branch Quotas
-                </h2>
-                <p className="text-xs text-slate-500 dark:text-slate-400">
-                  Configure monthly KES/USD pricing, branch limits, and user caps applied to new and renewing businesses.
+      {/* Main Scalable Control Area */}
+      <div className="min-w-0 flex-1 space-y-6">
+        {/* Sticky Action Header */}
+        <header className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-slate-200 bg-white px-5 py-4 dark:border-slate-800 dark:bg-slate-900">
+          <div>
+            <h1 className="font-display text-lg font-bold tracking-tight text-slate-900 dark:text-slate-100">
+              {navItems.find((n) => n.id === section)?.label}
+            </h1>
+            <p className="text-xs text-slate-500 dark:text-slate-400">
+              Enterprise Multi-Tenant Orchestration · {businesses.length} Tenants · {totalBranchesCount} Branches
+            </p>
+          </div>
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              onClick={onOpenNewBusinessWizard}
+              className="inline-flex items-center gap-1.5 rounded-lg bg-teal-700 px-3.5 py-2 text-xs font-semibold text-white hover:bg-teal-800 lg:hidden dark:bg-teal-600"
+            >
+              <Plus className="h-3.5 w-3.5" />
+              <span>Onboard</span>
+            </button>
+          </div>
+        </header>
+
+        {banner && (
+          <div className="flex items-center gap-2 rounded-lg border border-emerald-200 bg-emerald-50 px-4 py-2.5 text-xs font-medium text-emerald-800 dark:border-emerald-900 dark:bg-emerald-950/50 dark:text-emerald-300">
+            <CheckCircle2 className="h-4 w-4 shrink-0" />
+            <span>{banner}</span>
+          </div>
+        )}
+
+        {/* VIEW 1: PLATFORM OVERVIEW */}
+        {section === 'overview' && (
+          <div className="space-y-6">
+            <section className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4">
+              <div className="rounded-xl border border-slate-200 bg-white p-4 dark:border-slate-800 dark:bg-slate-900">
+                <div className="flex items-center justify-between text-xs text-slate-500 dark:text-slate-400">
+                  <span>Active Tenants &amp; Branches</span>
+                  <Building2 className="h-4 w-4 text-teal-700 dark:text-teal-400" />
+                </div>
+                <p className="mt-2 font-mono text-2xl font-bold tabular-nums text-slate-900 dark:text-slate-100">
+                  {activeBusinessesCount}{' '}
+                  <span className="text-sm font-normal text-slate-400">/ {businesses.length}</span>
+                </p>
+                <p className="mt-1 text-xs text-slate-600 dark:text-slate-400">
+                  <span className="font-mono font-semibold text-slate-800 dark:text-slate-200">
+                    {totalBranchesCount}
+                  </span>{' '}
+                  branches provisioned
                 </p>
               </div>
-              <button
-                type="button"
-                onClick={handleSavePlansClick}
-                className="inline-flex items-center gap-1.5 rounded-lg bg-teal-700 px-3.5 py-2 text-xs font-semibold text-white hover:bg-teal-800 dark:bg-teal-600"
-              >
-                <Save className="h-3.5 w-3.5" />
-                <span>Save Plan Pricing</span>
-              </button>
-            </div>
 
-            <div className="mt-4 grid grid-cols-1 gap-4 md:grid-cols-2 lg:grid-cols-4">
-              {editablePlans.map((plan, idx) => (
-                <div
-                  key={plan.id}
-                  className="space-y-2.5 rounded-lg border border-slate-200 bg-slate-50/70 p-4 text-xs dark:border-slate-800 dark:bg-slate-950/50"
-                >
-                  <div className="flex items-center justify-between">
-                    <span className="font-display font-bold text-slate-900 dark:text-slate-100">
-                      {plan.name}
-                    </span>
-                    <span className="font-mono text-[11px] text-slate-500">{plan.id}</span>
-                  </div>
-                  <p className="text-[11px] text-slate-500 dark:text-slate-400">{plan.tagline}</p>
-
-                  <div className="grid grid-cols-2 gap-2">
-                    <label className="block">
-                      <span className="text-[11px] text-slate-500">KES / mo</span>
-                      <input
-                        type="number"
-                        min={0}
-                        value={plan.monthlyPriceKes}
-                        onChange={(e) => {
-                          const val = Math.max(0, Number(e.target.value) || 0);
-                          setEditablePlans((prev) =>
-                            prev.map((p, i) => (i === idx ? { ...p, monthlyPriceKes: val } : p))
-                          );
-                        }}
-                        className="mt-0.5 w-full rounded border border-slate-200 bg-white px-2 py-1 font-mono text-xs dark:border-slate-700 dark:bg-slate-900"
-                      />
-                    </label>
-                    <label className="block">
-                      <span className="text-[11px] text-slate-500">USD / mo</span>
-                      <input
-                        type="number"
-                        min={0}
-                        value={plan.monthlyPriceUsd}
-                        onChange={(e) => {
-                          const val = Math.max(0, Number(e.target.value) || 0);
-                          setEditablePlans((prev) =>
-                            prev.map((p, i) => (i === idx ? { ...p, monthlyPriceUsd: val } : p))
-                          );
-                        }}
-                        className="mt-0.5 w-full rounded border border-slate-200 bg-white px-2 py-1 font-mono text-xs dark:border-slate-700 dark:bg-slate-900"
-                      />
-                    </label>
-                    <label className="block">
-                      <span className="text-[11px] text-slate-500">Branch Limit</span>
-                      <input
-                        type="number"
-                        min={1}
-                        value={plan.branchLimit}
-                        onChange={(e) => {
-                          const val = Math.max(1, Number(e.target.value) || 1);
-                          setEditablePlans((prev) =>
-                            prev.map((p, i) => (i === idx ? { ...p, branchLimit: val } : p))
-                          );
-                        }}
-                        className="mt-0.5 w-full rounded border border-slate-200 bg-white px-2 py-1 font-mono text-xs dark:border-slate-700 dark:bg-slate-900"
-                      />
-                    </label>
-                    <label className="block">
-                      <span className="text-[11px] text-slate-500">User Limit</span>
-                      <input
-                        type="number"
-                        min={1}
-                        value={plan.userLimit}
-                        onChange={(e) => {
-                          const val = Math.max(1, Number(e.target.value) || 1);
-                          setEditablePlans((prev) =>
-                            prev.map((p, i) => (i === idx ? { ...p, userLimit: val } : p))
-                          );
-                        }}
-                        className="mt-0.5 w-full rounded border border-slate-200 bg-white px-2 py-1 font-mono text-xs dark:border-slate-700 dark:bg-slate-900"
-                      />
-                    </label>
-                  </div>
+              <div className="rounded-xl border border-slate-200 bg-white p-4 dark:border-slate-800 dark:bg-slate-900">
+                <div className="flex items-center justify-between text-xs text-slate-500 dark:text-slate-400">
+                  <span>Recurring SaaS MRR</span>
+                  <Receipt className="h-4 w-4 text-teal-700 dark:text-teal-400" />
                 </div>
-              ))}
-            </div>
-          </section>
+                <p className="mt-2 font-mono text-2xl font-bold tabular-nums text-slate-900 dark:text-slate-100">
+                  KES {totalMrrKes.toLocaleString()}
+                </p>
+                <p className="mt-1 text-xs text-slate-600 dark:text-slate-400">
+                  {subscriptionInvoices.filter((i) => i.status === 'paid').length} paid invoices
+                </p>
+              </div>
 
-          {/* Collect / Process Subscription Payment */}
-          <form
-            onSubmit={handleProcessSubscriptionPayment}
-            className="space-y-3 rounded-xl border border-slate-200 bg-white p-5 dark:border-slate-800 dark:bg-slate-900"
-          >
-            <div className="flex items-center gap-2 text-xs font-semibold text-slate-900 dark:text-slate-100">
-              <CreditCard className="h-4 w-4 text-teal-700 dark:text-teal-400" />
-              <span>Collect / Settle Tenant Subscription Payment</span>
-            </div>
-            <div className="grid grid-cols-1 gap-3 sm:grid-cols-5">
-              <select
-                value={payBizId}
-                onChange={(e) => setPayBizId(e.target.value)}
-                className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-xs dark:border-slate-700 dark:bg-slate-800"
-              >
-                {businesses.map((b) => (
-                  <option key={b.id} value={b.id}>
-                    {b.name} (/{b.slug})
-                  </option>
-                ))}
-              </select>
-              <select
-                value={payPlanId}
-                onChange={(e) => setPayPlanId(e.target.value as SubscriptionPlanId)}
-                className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-xs dark:border-slate-700 dark:bg-slate-800"
-              >
-                {editablePlans.map((p) => (
-                  <option key={p.id} value={p.id}>
-                    {p.name} · KES {p.monthlyPriceKes.toLocaleString()}
-                  </option>
-                ))}
-              </select>
-              <select
-                value={payGatewayId}
-                onChange={(e) => setPayGatewayId(e.target.value)}
-                className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-xs dark:border-slate-700 dark:bg-slate-800"
-              >
-                {gateways
-                  .filter((g) => g.enabled)
-                  .map((g) => (
-                    <option key={g.id} value={g.id}>
-                      {g.displayName} ({g.shortcodeOrAccount})
-                    </option>
-                  ))}
-              </select>
-              <input
-                type="text"
-                value={payRefInput}
-                onChange={(e) => setPayRefInput(e.target.value)}
-                placeholder="M-Pesa / Bank Ref (optional)"
-                className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 font-mono text-xs dark:border-slate-700 dark:bg-slate-800"
-              />
-              <button
-                type="submit"
-                disabled={paying || gateways.filter((g) => g.enabled).length === 0}
-                className="rounded-lg bg-slate-900 px-4 py-2 text-xs font-semibold text-white hover:bg-slate-800 disabled:opacity-40 dark:bg-teal-600"
-              >
-                {paying ? 'Settling...' : 'Mark Paid & Renew'}
-              </button>
-            </div>
-          </form>
+              <div className="rounded-xl border border-slate-200 bg-white p-4 dark:border-slate-800 dark:bg-slate-900">
+                <div className="flex items-center justify-between text-xs text-slate-500 dark:text-slate-400">
+                  <span>Consent Grants</span>
+                  <Lock className="h-4 w-4 text-amber-600 dark:text-amber-400" />
+                </div>
+                <p className="mt-2 font-mono text-2xl font-bold tabular-nums text-slate-900 dark:text-slate-100">
+                  {activeAccessCount}{' '}
+                  <span className="text-sm font-normal text-slate-400">active</span>
+                </p>
+                <p className="mt-1 text-xs text-slate-600 dark:text-slate-400">
+                  {pendingAccessCount} awaiting Owner approval
+                </p>
+              </div>
 
-          {/* Subscription Invoices Ledger */}
-          <section className="rounded-xl border border-slate-200 bg-white dark:border-slate-800 dark:bg-slate-900">
-            <div className="border-b border-slate-200 px-5 py-3.5 dark:border-slate-800">
-              <h2 className="font-display text-sm font-semibold text-slate-900 dark:text-slate-100">
-                SaaS Subscription Invoices Ledger
-              </h2>
-            </div>
-            <div className="overflow-x-auto">
-              <table className="w-full text-left text-xs">
-                <thead>
-                  <tr className="border-b border-slate-200 text-slate-500 dark:border-slate-800 dark:text-slate-400">
-                    <th className="px-5 py-2.5 font-medium">Invoice #</th>
-                    <th className="px-5 py-2.5 font-medium">Business</th>
-                    <th className="px-5 py-2.5 font-medium">Plan & Period</th>
-                    <th className="px-5 py-2.5 font-medium">Collection Gateway</th>
-                    <th className="px-5 py-2.5 text-right font-medium">Amount</th>
-                    <th className="px-5 py-2.5 font-medium">Status</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
-                  {subscriptionInvoices.map((inv) => (
-                    <tr key={inv.id} className="hover:bg-slate-50 dark:hover:bg-slate-800/40">
-                      <td className="px-5 py-3 font-mono font-semibold text-slate-800 dark:text-slate-200">
-                        {inv.invoiceNo}
-                      </td>
-                      <td className="px-5 py-3">
+              <div className="rounded-xl border border-slate-200 bg-white p-4 dark:border-slate-800 dark:bg-slate-900">
+                <div className="flex items-center justify-between text-xs text-slate-500 dark:text-slate-400">
+                  <span>Software Users</span>
+                  <Users className="h-4 w-4 text-teal-700 dark:text-teal-400" />
+                </div>
+                <p className="mt-2 font-mono text-2xl font-bold tabular-nums text-slate-900 dark:text-slate-100">
+                  {activeUsersCount}{' '}
+                  <span className="text-sm font-normal text-slate-400">/ {platformUsers.length}</span>
+                </p>
+                <p className="mt-1 text-xs text-slate-600 dark:text-slate-400">
+                  {enabledGatewaysCount} active SaaS billing rails
+                </p>
+              </div>
+            </section>
+
+            {/* Quick Summary Grid */}
+            <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
+              <section className="rounded-xl border border-slate-200 bg-white p-5 dark:border-slate-800 dark:bg-slate-900">
+                <div className="flex items-center justify-between border-b border-slate-100 pb-3 dark:border-slate-800">
+                  <h2 className="font-display text-sm font-semibold text-slate-900 dark:text-slate-100">
+                    Privacy &amp; Support Access Status
+                  </h2>
+                  <button
+                    type="button"
+                    onClick={() => setSection('access_requests')}
+                    className="text-xs font-semibold text-teal-700 hover:underline dark:text-teal-400"
+                  >
+                    Manage Queue
+                  </button>
+                </div>
+                <div className="mt-3 divide-y divide-slate-100 text-xs dark:divide-slate-800">
+                  {businesses.slice(0, 5).map((b) => {
+                    const granted = isSupportAccessActive(b);
+                    const pending = b.supportAccess?.status === 'pending_approval';
+                    return (
+                      <div key={b.id} className="flex items-center justify-between py-2.5">
+                        <div>
+                          <p className="font-semibold text-slate-900 dark:text-slate-100">{b.name}</p>
+                          <p className="font-mono text-[11px] text-slate-500">
+                            misafarms.com/{b.slug}
+                          </p>
+                        </div>
+                        {granted ? (
+                          <span className="inline-flex items-center gap-1 font-mono text-[11px] font-semibold text-emerald-700 dark:text-emerald-400">
+                            <Unlock className="h-3 w-3" />
+                            Approved
+                          </span>
+                        ) : pending ? (
+                          <span className="inline-flex items-center gap-1 font-mono text-[11px] font-semibold text-amber-700 dark:text-amber-400">
+                            <Clock className="h-3 w-3" />
+                            Pending Owner
+                          </span>
+                        ) : (
+                          <button
+                            type="button"
+                            onClick={() => setAccessModalBiz(b)}
+                            className="rounded border border-slate-200 px-2.5 py-1 text-[11px] font-medium text-slate-700 hover:bg-slate-50 dark:border-slate-700 dark:text-slate-200"
+                          >
+                            Request Access
+                          </button>
+                        )}
+                      </div>
+                    );
+                  })}
+                </div>
+              </section>
+
+              <section className="rounded-xl border border-slate-200 bg-white p-5 dark:border-slate-800 dark:bg-slate-900">
+                <div className="flex items-center justify-between border-b border-slate-100 pb-3 dark:border-slate-800">
+                  <h2 className="font-display text-sm font-semibold text-slate-900 dark:text-slate-100">
+                    Recent Subscription Settlements
+                  </h2>
+                  <button
+                    type="button"
+                    onClick={() => setSection('subscriptions')}
+                    className="text-xs font-semibold text-teal-700 hover:underline dark:text-teal-400"
+                  >
+                    View Ledger
+                  </button>
+                </div>
+                <div className="mt-3 divide-y divide-slate-100 text-xs dark:divide-slate-800">
+                  {subscriptionInvoices.slice(0, 5).map((inv) => (
+                    <div key={inv.id} className="flex items-center justify-between py-2.5">
+                      <div>
                         <p className="font-semibold text-slate-900 dark:text-slate-100">
                           {inv.businessName}
                         </p>
                         <p className="font-mono text-[11px] text-slate-500">
-                          misafarms.com/{inv.businessSlug}
+                          {inv.invoiceNo} · {inv.planId}
                         </p>
-                      </td>
-                      <td className="px-5 py-3">
-                        <span className="font-medium text-slate-800 dark:text-slate-200">
-                          {inv.planId}
-                        </span>
-                        <span className="ml-1.5 text-slate-500">· {inv.periodLabel}</span>
-                      </td>
-                      <td className="px-5 py-3">
-                        <p className="text-slate-700 dark:text-slate-300">{inv.paymentMethod}</p>
-                        <p className="font-mono text-[11px] text-slate-400">Ref: {inv.paymentRef}</p>
-                      </td>
-                      <td className="px-5 py-3 text-right font-mono font-semibold tabular-nums">
-                        {inv.currency} {inv.amount.toLocaleString()}
-                      </td>
-                      <td className="px-5 py-3">
-                        <span
-                          className={`rounded px-2 py-0.5 text-[11px] font-semibold uppercase ${
-                            inv.status === 'paid'
-                              ? 'bg-emerald-50 text-emerald-700 dark:bg-emerald-950/60 dark:text-emerald-300'
-                              : inv.status === 'overdue'
-                                ? 'bg-rose-50 text-rose-700 dark:bg-rose-950/60 dark:text-rose-300'
-                                : 'bg-amber-50 text-amber-800 dark:bg-amber-950/60 dark:text-amber-300'
-                          }`}
-                        >
+                      </div>
+                      <div className="text-right font-mono tabular-nums">
+                        <p className="font-bold text-slate-900 dark:text-slate-100">
+                          {inv.currency} {inv.amount.toLocaleString()}
+                        </p>
+                        <p className="text-[11px] uppercase text-emerald-700 dark:text-emerald-400">
                           {inv.status}
-                        </span>
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          </section>
-        </div>
-      )}
-
-      {/* TAB 4: Super Admin SaaS Payment Config */}
-      {activeTab === 'payment_config' && (
-        <div className="space-y-6">
-          <div className="flex flex-wrap items-center justify-between gap-3">
-            <div>
-              <h2 className="font-display text-base font-bold text-slate-900 dark:text-slate-100">
-                SaaS Subscription Payment Gateways Configuration
-              </h2>
-              <p className="mt-0.5 text-xs text-slate-600 dark:text-slate-400">
-                Integrate and manage the Paybills, Tills, Card processors, and Bank EFT rails businesses pay MisafaRMS subscriptions with. Secret keys are write-only and stored strictly server-side.
-              </p>
-            </div>
-            <button
-              type="button"
-              onClick={handleSaveGatewaysClick}
-              disabled={savingGateways}
-              className="inline-flex items-center gap-1.5 rounded-lg bg-teal-700 px-4 py-2 text-xs font-semibold text-white hover:bg-teal-800 disabled:opacity-50 dark:bg-teal-600"
-            >
-              <Save className="h-3.5 w-3.5" />
-              <span>{savingGateways ? 'Saving...' : 'Save SaaS Payment Config'}</span>
-            </button>
-          </div>
-
-          <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
-            {gateways.map((gw) => (
-              <div
-                key={gw.id}
-                className="space-y-3 rounded-xl border border-slate-200 bg-white p-5 dark:border-slate-800 dark:bg-slate-900"
-              >
-                <div className="flex items-start justify-between gap-3">
-                  <div>
-                    <div className="flex items-center gap-2">
-                      <h3 className="font-display text-sm font-bold text-slate-900 dark:text-slate-100">
-                        {gw.displayName}
-                      </h3>
-                      <span
-                        className={`rounded px-2 py-0.5 text-[10px] font-semibold ${
-                          gw.environment === 'Production'
-                            ? 'bg-emerald-50 text-emerald-700 dark:bg-emerald-950/60 dark:text-emerald-300'
-                            : 'bg-amber-50 text-amber-800 dark:bg-amber-950/60 dark:text-amber-300'
-                        }`}
-                      >
-                        {gw.environment}
-                      </span>
+                        </p>
+                      </div>
                     </div>
-                    <p className="mt-0.5 text-[11px] text-slate-500 dark:text-slate-400">
-                      {gw.mode} · Currencies: {gw.currencies.join(', ')} · {gw.settlementSchedule}
-                    </p>
-                  </div>
-
-                  <label className="inline-flex cursor-pointer items-center gap-2 text-xs font-semibold">
-                    <input
-                      type="checkbox"
-                      checked={gw.enabled}
-                      onChange={(e) =>
-                        setGateways((prev) =>
-                          prev.map((item) =>
-                            item.id === gw.id ? { ...item, enabled: e.target.checked } : item
-                          )
-                        )
-                      }
-                      className="rounded border-slate-300 text-teal-700"
-                    />
-                    <span className={gw.enabled ? 'text-teal-700 dark:text-teal-400' : 'text-slate-400'}>
-                      {gw.enabled ? 'Enabled' : 'Disabled'}
-                    </span>
-                  </label>
+                  ))}
                 </div>
+              </section>
+            </div>
+          </div>
+        )}
 
-                <div className="grid grid-cols-2 gap-2.5 text-xs">
-                  <label className="block">
-                    <span className="text-[11px] font-medium text-slate-600 dark:text-slate-400">
-                      Paybill / Till / Merchant ID
-                    </span>
-                    <input
-                      type="text"
-                      value={gw.shortcodeOrAccount}
-                      onChange={(e) =>
-                        setGateways((prev) =>
-                          prev.map((item) =>
-                            item.id === gw.id
-                              ? { ...item, shortcodeOrAccount: e.target.value }
-                              : item
-                          )
-                        )
-                      }
-                      className="mt-1 w-full rounded-lg border border-slate-200 bg-slate-50 px-2.5 py-1.5 font-mono text-xs dark:border-slate-700 dark:bg-slate-800"
-                    />
-                  </label>
-
-                  <label className="block">
-                    <span className="text-[11px] font-medium text-slate-600 dark:text-slate-400">
-                      Account Reference Prefix
-                    </span>
-                    <input
-                      type="text"
-                      value={gw.accountPrefix}
-                      onChange={(e) =>
-                        setGateways((prev) =>
-                          prev.map((item) =>
-                            item.id === gw.id ? { ...item, accountPrefix: e.target.value } : item
-                          )
-                        )
-                      }
-                      className="mt-1 w-full rounded-lg border border-slate-200 bg-slate-50 px-2.5 py-1.5 font-mono text-xs dark:border-slate-700 dark:bg-slate-800"
-                    />
-                  </label>
-
-                  <label className="block">
-                    <span className="text-[11px] font-medium text-slate-600 dark:text-slate-400">
-                      Environment
-                    </span>
-                    <select
-                      value={gw.environment}
-                      onChange={(e) =>
-                        setGateways((prev) =>
-                          prev.map((item) =>
-                            item.id === gw.id
-                              ? {
-                                  ...item,
-                                  environment: e.target.value as 'Production' | 'Sandbox',
-                                }
-                              : item
-                          )
-                        )
-                      }
-                      className="mt-1 w-full rounded-lg border border-slate-200 bg-slate-50 px-2.5 py-1.5 text-xs dark:border-slate-700 dark:bg-slate-800"
-                    >
-                      <option value="Production">Production</option>
-                      <option value="Sandbox">Sandbox</option>
-                    </select>
-                  </label>
-
-                  <label className="block">
-                    <span className="text-[11px] font-medium text-slate-600 dark:text-slate-400">
-                      Settlement Schedule
-                    </span>
-                    <input
-                      type="text"
-                      value={gw.settlementSchedule}
-                      onChange={(e) =>
-                        setGateways((prev) =>
-                          prev.map((item) =>
-                            item.id === gw.id
-                              ? { ...item, settlementSchedule: e.target.value }
-                              : item
-                          )
-                        )
-                      }
-                      className="mt-1 w-full rounded-lg border border-slate-200 bg-slate-50 px-2.5 py-1.5 text-xs dark:border-slate-700 dark:bg-slate-800"
-                    />
-                  </label>
-                </div>
-
-                <label className="block text-xs">
-                  <span className="text-[11px] font-medium text-slate-600 dark:text-slate-400">
-                    Webhook / IPN Callback URL
-                  </span>
+        {/* VIEW 2: TENANTS & ZERO-TRUST PRIVACY DIRECTORY */}
+        {section === 'businesses' && (
+          <div className="space-y-4">
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <div className="flex flex-1 flex-wrap items-center gap-2">
+                <div className="relative flex-1 min-w-[220px] max-w-md">
+                  <Search className="pointer-events-none absolute top-1/2 left-3 h-3.5 w-3.5 -translate-y-1/2 text-slate-400" />
                   <input
                     type="text"
-                    value={gw.webhookUrl}
-                    onChange={(e) =>
-                      setGateways((prev) =>
-                        prev.map((item) =>
-                          item.id === gw.id ? { ...item, webhookUrl: e.target.value } : item
-                        )
-                      )
-                    }
-                    className="mt-1 w-full rounded-lg border border-slate-200 bg-slate-50 px-2.5 py-1.5 font-mono text-[11px] dark:border-slate-700 dark:bg-slate-800"
-                  />
-                </label>
-
-                <div className="rounded-lg border border-slate-200 bg-slate-50 p-3 dark:border-slate-800 dark:bg-slate-950/60">
-                  <div className="flex items-center justify-between text-[11px]">
-                    <span className="inline-flex items-center gap-1 font-medium text-slate-700 dark:text-slate-300">
-                      <KeyRound className="h-3.5 w-3.5 text-teal-700 dark:text-teal-400" />
-                      <span>Rotate API Secret / Consumer Passkey (Write-Only)</span>
-                    </span>
-                    <span
-                      className={`font-mono font-semibold ${
-                        gw.hasSecretConfigured ? 'text-emerald-700 dark:text-emerald-400' : 'text-amber-600'
-                      }`}
-                    >
-                      {gw.hasSecretConfigured ? 'Configured Server-Side' : 'Not Rotated'}
-                    </span>
-                  </div>
-                  <input
-                    type="password"
-                    value={secretInputs[gw.id] || ''}
-                    onChange={(e) =>
-                      setSecretInputs((prev) => ({ ...prev, [gw.id]: e.target.value }))
-                    }
-                    placeholder="Enter new secret/passkey to rotate on server..."
-                    className="mt-1.5 w-full rounded border border-slate-200 bg-white px-2.5 py-1.5 font-mono text-xs dark:border-slate-700 dark:bg-slate-900"
+                    value={bizSearch}
+                    onChange={(e) => {
+                      setBizSearch(e.target.value);
+                      setBizPage(1);
+                    }}
+                    placeholder="Search business name, slug, or country..."
+                    className="w-full rounded-lg border border-slate-200 bg-white py-2 pr-3 pl-8 text-xs text-slate-900 focus:border-teal-600 focus:outline-none dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100"
                   />
                 </div>
+                <select
+                  value={bizStatusFilter}
+                  onChange={(e) => {
+                    setBizStatusFilter(e.target.value as 'all' | SubscriptionStatus);
+                    setBizPage(1);
+                  }}
+                  className="rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs text-slate-800 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200"
+                >
+                  <option value="all">All Statuses</option>
+                  <option value="active">Active</option>
+                  <option value="trial">Trial</option>
+                  <option value="past_due">Past Due</option>
+                  <option value="suspended">Suspended</option>
+                </select>
               </div>
-            ))}
-          </div>
+              <span className="font-mono text-xs text-slate-500 dark:text-slate-400">
+                Page {safeBizPage} / {totalBizPages} · {filteredBusinesses.length} tenants
+              </span>
+            </div>
 
-          {/* Add Custom SaaS Billing Gateway */}
-          <form
-            onSubmit={handleAddCustomGateway}
-            className="space-y-3 rounded-xl border border-slate-200 bg-white p-5 dark:border-slate-800 dark:bg-slate-900"
-          >
-            <h3 className="font-display text-sm font-bold text-slate-900 dark:text-slate-100">
-              Integrate Additional SaaS Collection Gateway
-            </h3>
-            <div className="grid grid-cols-1 gap-2.5 sm:grid-cols-5">
-              <input
-                type="text"
-                required
-                value={customGwName}
-                onChange={(e) => setCustomGwName(e.target.value)}
-                placeholder="Gateway Name (e.g. Flutterwave / Jenga)"
-                className="sm:col-span-2 rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-xs dark:border-slate-700 dark:bg-slate-800"
-              />
-              <select
-                value={customGwMode}
-                onChange={(e) => setCustomGwMode(e.target.value as PlatformBillingGateway['mode'])}
-                className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-xs dark:border-slate-700 dark:bg-slate-800"
-              >
-                <option value="Paybill">Paybill</option>
-                <option value="Merchant Till">Merchant Till</option>
-                <option value="Card & Mobile">Card & Mobile</option>
-                <option value="International Card">International Card</option>
-                <option value="Bank EFT / RTGS">Bank EFT / RTGS</option>
-                <option value="Custom">Custom Rail</option>
-              </select>
-              <input
-                type="text"
-                value={customGwAccount}
-                onChange={(e) => setCustomGwAccount(e.target.value)}
-                placeholder="Merchant ID / Account #"
-                className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 font-mono text-xs dark:border-slate-700 dark:bg-slate-800"
-              />
+            <div className="space-y-3">
+              {pagedBusinesses.map((biz) => {
+                const consented = isSupportAccessActive(biz);
+                const pending = biz.supportAccess?.status === 'pending_approval';
+                const bizBranches = stores.filter((s) => s.businessId === biz.id);
+                const bizStaffCount = employees.filter((e) => e.businessId === biz.id).length;
+                const bizSkuCount = products.filter((p) => p.businessId === biz.id).length;
+                const isExpanded = expandedBizId === biz.id;
+                const branchLimit = biz.branchLimit ?? 5;
+                const status = biz.subscriptionStatus || 'active';
+
+                return (
+                  <div
+                    key={biz.id}
+                    className="overflow-hidden rounded-xl border border-slate-200 bg-white dark:border-slate-800 dark:bg-slate-900"
+                  >
+                    <div className="flex flex-wrap items-center justify-between gap-4 px-5 py-4">
+                      <div className="flex items-start gap-3">
+                        <button
+                          type="button"
+                          onClick={() => setExpandedBizId(isExpanded ? null : biz.id)}
+                          className="mt-0.5 rounded border border-slate-200 p-1 text-slate-500 hover:bg-slate-100 dark:border-slate-700 dark:hover:bg-slate-800"
+                          aria-label={`Toggle details for ${biz.name}`}
+                        >
+                          {isExpanded ? (
+                            <ChevronDown className="h-4 w-4" />
+                          ) : (
+                            <ChevronRight className="h-4 w-4" />
+                          )}
+                        </button>
+
+                        <div>
+                          <div className="flex flex-wrap items-center gap-2">
+                            <h2 className="font-display text-sm font-bold text-slate-900 dark:text-slate-100">
+                              {biz.name}
+                            </h2>
+                            <span className="inline-flex items-center gap-1 rounded bg-slate-100 px-2 py-0.5 font-mono text-[11px] font-medium text-teal-800 dark:bg-slate-800 dark:text-teal-300">
+                              <Globe className="h-3 w-3" />
+                              misafarms.com/{biz.slug}
+                            </span>
+                            <span
+                              className={`rounded px-2 py-0.5 text-[11px] font-semibold capitalize ${
+                                status === 'active'
+                                  ? 'bg-emerald-50 text-emerald-700 dark:bg-emerald-950/60 dark:text-emerald-300'
+                                  : status === 'trial'
+                                    ? 'bg-sky-50 text-sky-700 dark:bg-sky-950/60 dark:text-sky-300'
+                                    : status === 'past_due'
+                                      ? 'bg-amber-50 text-amber-800 dark:bg-amber-950/60 dark:text-amber-300'
+                                      : 'bg-rose-50 text-rose-700 dark:bg-rose-950/60 dark:text-rose-300'
+                              }`}
+                            >
+                              {status.replace('_', ' ')}
+                            </span>
+                            {consented ? (
+                              <span className="inline-flex items-center gap-1 rounded bg-emerald-50 px-2 py-0.5 font-mono text-[10px] font-semibold text-emerald-800 dark:bg-emerald-950/60 dark:text-emerald-300">
+                                <Unlock className="h-3 w-3" />
+                                Consent Granted
+                              </span>
+                            ) : (
+                              <span className="inline-flex items-center gap-1 rounded bg-slate-100 px-2 py-0.5 font-mono text-[10px] font-semibold text-slate-600 dark:bg-slate-800 dark:text-slate-300">
+                                <Lock className="h-3 w-3" />
+                                Zero-Trust Masked
+                              </span>
+                            )}
+                          </div>
+
+                          <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">
+                            {consented ? (
+                              <>
+                                Owner: {biz.ownerName || 'Admin'} ({biz.ownerEmail || 'owner@misafarms.com'}) · Tax PIN:{' '}
+                                <span className="font-mono">{biz.taxPin}</span> · {biz.country} ({biz.currency})
+                              </>
+                            ) : (
+                              <>
+                                Owner PII &amp; KRA Tax ID masked — Private until Owner consent · {biz.country} ({biz.currency})
+                              </>
+                            )}
+                          </p>
+                        </div>
+                      </div>
+
+                      <div className="flex flex-wrap items-center gap-2.5 text-xs">
+                        <div className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-1.5 dark:border-slate-700 dark:bg-slate-800">
+                          <span className="text-[11px] text-slate-500 dark:text-slate-400">Branches</span>
+                          <div className="font-mono font-bold tabular-nums text-slate-900 dark:text-slate-100">
+                            {bizBranches.length} / {branchLimit >= 999 ? '∞' : branchLimit}
+                          </div>
+                        </div>
+
+                        <div className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-1.5 dark:border-slate-700 dark:bg-slate-800">
+                          <span className="text-[11px] text-slate-500 dark:text-slate-400">Staff / SKUs</span>
+                          <div className="font-mono font-bold tabular-nums text-slate-900 dark:text-slate-100">
+                            {consented ? `${bizStaffCount} · ${bizSkuCount}` : 'Masked'}
+                          </div>
+                        </div>
+
+                        <select
+                          aria-label={`Subscription plan for ${biz.name}`}
+                          value={biz.subscriptionPlan || 'Trial'}
+                          onChange={async (e) => {
+                            await onUpdateBusinessSubscription(biz.id, {
+                              subscriptionPlan: e.target.value as SubscriptionPlanId,
+                            });
+                            notify(`Updated ${biz.name} to ${e.target.value} plan.`);
+                          }}
+                          className="rounded-lg border border-slate-200 bg-white px-2.5 py-2 text-xs font-medium text-slate-800 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-200"
+                        >
+                          {subscriptionPlans.map((p) => (
+                            <option key={p.id} value={p.id}>
+                              {p.name} (KES {p.monthlyPriceKes.toLocaleString()})
+                            </option>
+                          ))}
+                        </select>
+
+                        <button
+                          type="button"
+                          onClick={async () => {
+                            const nextStatus: SubscriptionStatus =
+                              status === 'suspended' ? 'active' : 'suspended';
+                            await onUpdateBusinessSubscription(biz.id, {
+                              subscriptionStatus: nextStatus,
+                            });
+                            notify(
+                              `${biz.name} workspace ${nextStatus === 'suspended' ? 'suspended' : 'reactivated'}.`
+                            );
+                          }}
+                          className={`rounded-lg border px-3 py-2 text-xs font-semibold ${
+                            status === 'suspended'
+                              ? 'border-emerald-300 bg-emerald-50 text-emerald-800 hover:bg-emerald-100 dark:border-emerald-800 dark:bg-emerald-950/50 dark:text-emerald-300'
+                              : 'border-rose-200 bg-white text-rose-700 hover:bg-rose-50 dark:border-rose-900 dark:bg-slate-900 dark:text-rose-400'
+                          }`}
+                        >
+                          {status === 'suspended' ? 'Reactivate' : 'Suspend'}
+                        </button>
+
+                        {consented ? (
+                          <button
+                            type="button"
+                            onClick={() => onSwitchToBusiness(biz.id)}
+                            className="inline-flex items-center gap-1 rounded-lg bg-slate-900 px-3 py-2 text-xs font-semibold text-white hover:bg-slate-800 dark:bg-teal-600"
+                          >
+                            <span>Enter Workspace</span>
+                            <ExternalLink className="h-3 w-3" />
+                          </button>
+                        ) : pending ? (
+                          <span className="inline-flex items-center gap-1 rounded-lg border border-amber-300 bg-amber-50 px-3 py-2 text-xs font-semibold text-amber-800 dark:border-amber-800 dark:bg-amber-950/50 dark:text-amber-300">
+                            <Clock className="h-3.5 w-3.5" />
+                            <span>Pending Owner Approval</span>
+                          </span>
+                        ) : (
+                          <button
+                            type="button"
+                            onClick={() => setAccessModalBiz(biz)}
+                            className="inline-flex items-center gap-1 rounded-lg border border-teal-700 bg-teal-50 px-3 py-2 text-xs font-semibold text-teal-800 hover:bg-teal-100 dark:border-teal-600 dark:bg-teal-950/50 dark:text-teal-300"
+                          >
+                            <Lock className="h-3.5 w-3.5" />
+                            <span>Request Access</span>
+                          </button>
+                        )}
+                      </div>
+                    </div>
+
+                    {/* Expanded Branches Drawer — Respects Zero-Trust Consent */}
+                    {isExpanded && (
+                      <div className="border-t border-slate-200 bg-slate-50/70 px-5 py-4 dark:border-slate-800 dark:bg-slate-950/40">
+                        {!consented ? (
+                          <div className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-slate-200 bg-white p-4 text-xs dark:border-slate-800 dark:bg-slate-900">
+                            <div className="flex items-start gap-2.5">
+                              <ShieldAlert className="mt-0.5 h-4 w-4 text-amber-600 shrink-0" />
+                              <div>
+                                <p className="font-semibold text-slate-900 dark:text-slate-100">
+                                  Branch registers, eTIMS serials, and personal details are protected
+                                </p>
+                                <p className="mt-0.5 text-slate-500 dark:text-slate-400">
+                                  Request time-limited support consent from {biz.name}&apos;s Owner to inspect branch hardware or enter this workspace.
+                                </p>
+                              </div>
+                            </div>
+                            <button
+                              type="button"
+                              onClick={() => setAccessModalBiz(biz)}
+                              className="rounded-lg bg-slate-900 px-3.5 py-2 text-xs font-semibold text-white hover:bg-slate-800 dark:bg-teal-600"
+                            >
+                              Request Owner Consent
+                            </button>
+                          </div>
+                        ) : (
+                          <>
+                            <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+                              <div className="flex items-center gap-2 text-xs font-semibold text-slate-800 dark:text-slate-200">
+                                <Store className="h-4 w-4 text-teal-700 dark:text-teal-400" />
+                                <span>
+                                  Registered Store Branches for {biz.name} ({bizBranches.length} of{' '}
+                                  {branchLimit >= 999 ? 'Unlimited' : branchLimit} quota)
+                                </span>
+                              </div>
+                              <div className="flex items-center gap-2">
+                                <label className="inline-flex items-center gap-1.5 text-xs text-slate-600 dark:text-slate-400">
+                                  <span>Branch Quota:</span>
+                                  <input
+                                    type="number"
+                                    min={1}
+                                    max={999}
+                                    value={branchLimit}
+                                    onChange={async (e) => {
+                                      const val = Math.max(1, Number(e.target.value) || 1);
+                                      await onUpdateBusinessSubscription(biz.id, { branchLimit: val });
+                                    }}
+                                    className="w-16 rounded border border-slate-300 bg-white px-2 py-1 font-mono text-xs text-slate-900 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100"
+                                  />
+                                </label>
+                                <button
+                                  type="button"
+                                  onClick={() =>
+                                    setBranchFormBizId(branchFormBizId === biz.id ? null : biz.id)
+                                  }
+                                  className="inline-flex items-center gap-1 rounded-lg border border-teal-700 bg-white px-2.5 py-1 text-xs font-semibold text-teal-800 hover:bg-teal-50 dark:border-teal-600 dark:bg-slate-900 dark:text-teal-300"
+                                >
+                                  <Plus className="h-3.5 w-3.5" />
+                                  <span>Add Branch</span>
+                                </button>
+                              </div>
+                            </div>
+
+                            {branchFormBizId === biz.id && (
+                              <form
+                                onSubmit={(e) => handleAddBranchSubmit(e, biz.id)}
+                                className="mb-3 grid grid-cols-1 gap-2 rounded-lg border border-slate-200 bg-white p-3 sm:grid-cols-4 dark:border-slate-700 dark:bg-slate-900"
+                              >
+                                <input
+                                  type="text"
+                                  required
+                                  value={newBranchName}
+                                  onChange={(e) => setNewBranchName(e.target.value)}
+                                  placeholder="Branch Name (e.g. Nakuru CBD)"
+                                  className="rounded border border-slate-200 px-2.5 py-1.5 text-xs dark:border-slate-700 dark:bg-slate-800"
+                                />
+                                <input
+                                  type="text"
+                                  value={newBranchLocation}
+                                  onChange={(e) => setNewBranchLocation(e.target.value)}
+                                  placeholder="Location / Street"
+                                  className="rounded border border-slate-200 px-2.5 py-1.5 text-xs dark:border-slate-700 dark:bg-slate-800"
+                                />
+                                <input
+                                  type="text"
+                                  value={newBranchTill}
+                                  onChange={(e) => setNewBranchTill(e.target.value)}
+                                  placeholder="Till / Register Ref"
+                                  className="rounded border border-slate-200 px-2.5 py-1.5 font-mono text-xs dark:border-slate-700 dark:bg-slate-800"
+                                />
+                                <button
+                                  type="submit"
+                                  className="rounded bg-teal-700 px-3 py-1.5 text-xs font-semibold text-white hover:bg-teal-800"
+                                >
+                                  Provision Branch
+                                </button>
+                              </form>
+                            )}
+
+                            <div className="grid grid-cols-1 gap-2.5 md:grid-cols-2 lg:grid-cols-3">
+                              {bizBranches.map((br) => (
+                                <div
+                                  key={br.id}
+                                  className="rounded-lg border border-slate-200 bg-white p-3 text-xs dark:border-slate-800 dark:bg-slate-900"
+                                >
+                                  <div className="flex items-center justify-between">
+                                    <span className="font-semibold text-slate-900 dark:text-slate-100">
+                                      {br.name}
+                                    </span>
+                                    <span className="font-mono text-[11px] font-semibold text-teal-700 dark:text-teal-400">
+                                      {br.code}
+                                    </span>
+                                  </div>
+                                  <p className="mt-1 text-[11px] text-slate-500 dark:text-slate-400">
+                                    {br.location} · Register {br.registerId}
+                                  </p>
+                                  <div className="mt-2 flex flex-wrap items-center justify-between gap-2 border-t border-slate-100 pt-2 font-mono text-[11px] text-slate-600 dark:border-slate-800 dark:text-slate-300">
+                                    <span>eTIMS BHF-{br.etimsBhfId}: {br.vscuSerial}</span>
+                                    <span>Till {br.tillNumber}</span>
+                                  </div>
+                                </div>
+                              ))}
+                            </div>
+                          </>
+                        )}
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+
+            {totalBizPages > 1 && (
+              <div className="flex items-center justify-end gap-2 text-xs">
+                <button
+                  type="button"
+                  disabled={safeBizPage <= 1}
+                  onClick={() => setBizPage((p) => Math.max(1, p - 1))}
+                  className="inline-flex items-center gap-1 rounded border border-slate-200 bg-white px-2.5 py-1.5 disabled:opacity-40 dark:border-slate-700 dark:bg-slate-900"
+                >
+                  <ChevronLeft className="h-3.5 w-3.5" />
+                  Prev
+                </button>
+                <span className="font-mono text-slate-500">
+                  {safeBizPage} / {totalBizPages}
+                </span>
+                <button
+                  type="button"
+                  disabled={safeBizPage >= totalBizPages}
+                  onClick={() => setBizPage((p) => Math.min(totalBizPages, p + 1))}
+                  className="inline-flex items-center gap-1 rounded border border-slate-200 bg-white px-2.5 py-1.5 disabled:opacity-40 dark:border-slate-700 dark:bg-slate-900"
+                >
+                  Next
+                  <ChevronRight className="h-3.5 w-3.5" />
+                </button>
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* VIEW 3: PRIVACY & SUPPORT ACCESS REQUEST QUEUE */}
+        {section === 'access_requests' && (
+          <div className="space-y-4">
+            <section className="rounded-xl border border-slate-200 bg-white p-5 dark:border-slate-800 dark:bg-slate-900">
+              <h2 className="font-display text-sm font-semibold text-slate-900 dark:text-slate-100">
+                Active &amp; Pending Tenant Privacy Access Sessions
+              </h2>
+              <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">
+                All workspace entries by Super Admins require a logged reason and explicit Owner approval with an automatic TTL expiry.
+              </p>
+
+              <div className="mt-4 divide-y divide-slate-100 text-xs dark:divide-slate-800">
+                {businesses.map((biz) => {
+                  const granted = isSupportAccessActive(biz);
+                  const sa = biz.supportAccess;
+                  return (
+                    <div key={biz.id} className="flex flex-wrap items-center justify-between gap-3 py-3">
+                      <div>
+                        <p className="font-semibold text-slate-900 dark:text-slate-100">
+                          {biz.name}{' '}
+                          <span className="font-mono text-[11px] font-normal text-slate-500">
+                            (misafarms.com/{biz.slug})
+                          </span>
+                        </p>
+                        <p className="mt-0.5 text-[11px] text-slate-500 dark:text-slate-400">
+                          {sa?.reason
+                            ? `Reason: "${sa.reason}" · Requested by ${sa.requestedByEmail || 'Super Admin'}`
+                            : 'No active or pending support access request'}
+                        </p>
+                      </div>
+
+                      <div className="flex items-center gap-2">
+                        {granted ? (
+                          <>
+                            <span className="font-mono text-[11px] text-emerald-700 dark:text-emerald-400">
+                              Expires {sa?.expiresAt ? new Date(sa.expiresAt).toLocaleTimeString() : 'manual'}
+                            </span>
+                            <button
+                              type="button"
+                              onClick={() => onSwitchToBusiness(biz.id)}
+                              className="inline-flex items-center gap-1 rounded-lg bg-slate-900 px-3 py-1.5 font-semibold text-white hover:bg-slate-800 dark:bg-teal-600"
+                            >
+                              <span>Enter Workspace</span>
+                              <ExternalLink className="h-3 w-3" />
+                            </button>
+                          </>
+                        ) : sa?.status === 'pending_approval' ? (
+                          <span className="rounded bg-amber-50 px-2.5 py-1 font-mono text-[11px] font-semibold text-amber-800 dark:bg-amber-950/60 dark:text-amber-300">
+                            Awaiting Owner Approval ({sa.requestedDurationHours || 4}h)
+                          </span>
+                        ) : (
+                          <button
+                            type="button"
+                            onClick={() => setAccessModalBiz(biz)}
+                            className="inline-flex items-center gap-1 rounded-lg border border-slate-200 px-3 py-1.5 font-semibold text-slate-700 hover:bg-slate-50 dark:border-slate-700 dark:text-slate-200"
+                          >
+                            <Lock className="h-3.5 w-3.5" />
+                            <span>Request Consent</span>
+                          </button>
+                        )}
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            </section>
+          </div>
+        )}
+
+        {/* VIEW 4: SOFTWARE USERS DIRECTORY & PROVISIONING */}
+        {section === 'users' && (
+          <div className="space-y-5">
+            <form
+              onSubmit={handleAddUserSubmit}
+              className="space-y-3 rounded-xl border border-slate-200 bg-white p-5 dark:border-slate-800 dark:bg-slate-900"
+            >
+              <div className="flex items-center gap-2 text-xs font-semibold text-slate-900 dark:text-slate-100">
+                <UserPlus className="h-4 w-4 text-teal-700 dark:text-teal-400" />
+                <span>Invite or Provision SaaS Software User</span>
+              </div>
+              <div className="grid grid-cols-1 gap-2.5 sm:grid-cols-5">
+                <input
+                  type="text"
+                  required
+                  value={newUserName}
+                  onChange={(e) => setNewUserName(e.target.value)}
+                  placeholder="Full Name"
+                  className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-900 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-100"
+                />
+                <input
+                  type="email"
+                  required
+                  value={newUserEmail}
+                  onChange={(e) => setNewUserEmail(e.target.value)}
+                  placeholder="user@company.co.ke"
+                  className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-900 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-100"
+                />
+                <select
+                  value={newUserTier}
+                  onChange={(e) => {
+                    const t = e.target.value as PlatformUserRecord['tier'];
+                    setNewUserTier(t);
+                    if (t === 'super_admin') setNewUserRole('Super Admin');
+                    else if (t === 'admin') setNewUserRole('Owner');
+                    else if (t === 'employee') setNewUserRole('Cashier');
+                    else setNewUserRole('Customer');
+                  }}
+                  className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-900 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-100"
+                >
+                  <option value="super_admin">Tier: Super Admin</option>
+                  <option value="admin">Tier: Business Admin</option>
+                  <option value="employee">Tier: Employee (Staff)</option>
+                  <option value="user">Tier: Portal User</option>
+                </select>
+                <select
+                  value={newUserBizId}
+                  disabled={newUserTier === 'super_admin'}
+                  onChange={(e) => setNewUserBizId(e.target.value)}
+                  className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-900 disabled:opacity-50 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-100"
+                >
+                  {businesses.map((b) => (
+                    <option key={b.id} value={b.id}>
+                      {b.name} (/{b.slug})
+                    </option>
+                  ))}
+                </select>
+                <button
+                  type="submit"
+                  className="inline-flex items-center justify-center gap-1.5 rounded-lg bg-teal-700 px-4 py-2 text-xs font-semibold text-white hover:bg-teal-800 dark:bg-teal-600"
+                >
+                  <Plus className="h-3.5 w-3.5" />
+                  <span>Add Software User</span>
+                </button>
+              </div>
+            </form>
+
+            <section className="rounded-xl border border-slate-200 bg-white dark:border-slate-800 dark:bg-slate-900">
+              <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-200 px-5 py-3.5 dark:border-slate-800">
+                <div className="flex flex-wrap items-center gap-2">
+                  <input
+                    type="text"
+                    value={userSearch}
+                    onChange={(e) => {
+                      setUserSearch(e.target.value);
+                      setUserPage(1);
+                    }}
+                    placeholder="Filter users by name, email, or tenant..."
+                    className="w-64 rounded-lg border border-slate-200 bg-slate-50 px-3 py-1.5 text-xs dark:border-slate-700 dark:bg-slate-800"
+                  />
+                  <select
+                    value={tierFilter}
+                    onChange={(e) => {
+                      setTierFilter(e.target.value as 'all' | PlatformUserRecord['tier']);
+                      setUserPage(1);
+                    }}
+                    className="rounded-lg border border-slate-200 bg-slate-50 px-2.5 py-1.5 text-xs dark:border-slate-700 dark:bg-slate-800"
+                  >
+                    <option value="all">All Access Tiers</option>
+                    <option value="super_admin">Super Admin</option>
+                    <option value="admin">Business Admin</option>
+                    <option value="employee">Staff Employee</option>
+                    <option value="user">Portal Customer</option>
+                  </select>
+                </div>
+                <span className="font-mono text-xs text-slate-500">
+                  Page {safeUserPage} / {totalUserPages} · {filteredUsers.length} accounts
+                </span>
+              </div>
+
+              <div className="overflow-x-auto">
+                <table className="w-full text-left text-xs">
+                  <thead>
+                    <tr className="border-b border-slate-200 text-slate-500 dark:border-slate-800 dark:text-slate-400">
+                      <th className="px-5 py-3 font-medium">User</th>
+                      <th className="px-5 py-3 font-medium">Access Tier</th>
+                      <th className="px-5 py-3 font-medium">Role</th>
+                      <th className="px-5 py-3 font-medium">Assigned Business</th>
+                      <th className="px-5 py-3 font-medium">Status</th>
+                      <th className="px-5 py-3 text-right font-medium">Actions</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
+                    {pagedUsers.map((usr) => (
+                      <tr key={usr.id} className="hover:bg-slate-50 dark:hover:bg-slate-800/40">
+                        <td className="px-5 py-3">
+                          <p className="font-semibold text-slate-900 dark:text-slate-100">{usr.name}</p>
+                          <p className="font-mono text-[11px] text-slate-500">{usr.email}</p>
+                        </td>
+                        <td className="px-5 py-3">
+                          <select
+                            aria-label={`Tier for ${usr.email}`}
+                            value={usr.tier}
+                            onChange={async (e) => {
+                              await onUpdatePlatformUser(usr.id, {
+                                tier: e.target.value as PlatformUserRecord['tier'],
+                              });
+                              notify(`Updated access tier for ${usr.email}.`);
+                            }}
+                            className="rounded border border-slate-200 bg-slate-50 px-2 py-1 text-xs font-medium dark:border-slate-700 dark:bg-slate-800"
+                          >
+                            <option value="super_admin">Super Admin</option>
+                            <option value="admin">Business Admin</option>
+                            <option value="employee">Employee</option>
+                            <option value="user">Portal User</option>
+                          </select>
+                        </td>
+                        <td className="px-5 py-3 text-slate-700 dark:text-slate-300">{usr.role}</td>
+                        <td className="px-5 py-3">
+                          {usr.tier === 'super_admin' ? (
+                            <span className="font-mono text-[11px] text-teal-700 dark:text-teal-400">
+                              Platform Global
+                            </span>
+                          ) : (
+                            <select
+                              aria-label={`Business for ${usr.email}`}
+                              value={usr.businessId || ''}
+                              onChange={async (e) => {
+                                await onUpdatePlatformUser(usr.id, { businessId: e.target.value });
+                                notify(`Reassigned ${usr.email} to new workspace.`);
+                              }}
+                              className="rounded border border-slate-200 bg-slate-50 px-2 py-1 text-xs dark:border-slate-700 dark:bg-slate-800"
+                            >
+                              <option value="">Unassigned</option>
+                              {businesses.map((b) => (
+                                <option key={b.id} value={b.id}>
+                                  {b.name} (/{b.slug})
+                                </option>
+                              ))}
+                            </select>
+                          )}
+                        </td>
+                        <td className="px-5 py-3">
+                          <span
+                            className={`rounded px-2 py-0.5 text-[11px] font-semibold capitalize ${
+                              usr.status === 'active'
+                                ? 'bg-emerald-50 text-emerald-700 dark:bg-emerald-950/60 dark:text-emerald-300'
+                                : 'bg-rose-50 text-rose-700 dark:bg-rose-950/60 dark:text-rose-300'
+                            }`}
+                          >
+                            {usr.status}
+                          </span>
+                        </td>
+                        <td className="px-5 py-3 text-right">
+                          <button
+                            type="button"
+                            onClick={async () => {
+                              const nextStatus = usr.status === 'active' ? 'suspended' : 'active';
+                              await onUpdatePlatformUser(usr.id, { status: nextStatus });
+                              notify(`${usr.email} marked ${nextStatus}.`);
+                            }}
+                            className="rounded border border-slate-200 px-2.5 py-1 text-[11px] font-semibold text-slate-700 hover:bg-slate-100 dark:border-slate-700 dark:text-slate-200"
+                          >
+                            {usr.status === 'active' ? 'Suspend' : 'Activate'}
+                          </button>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+
+              {totalUserPages > 1 && (
+                <div className="flex items-center justify-end gap-2 border-t border-slate-200 px-5 py-3 text-xs dark:border-slate-800">
+                  <button
+                    type="button"
+                    disabled={safeUserPage <= 1}
+                    onClick={() => setUserPage((p) => Math.max(1, p - 1))}
+                    className="rounded border border-slate-200 px-2.5 py-1 disabled:opacity-40 dark:border-slate-700"
+                  >
+                    Prev
+                  </button>
+                  <span className="font-mono text-slate-500">
+                    {safeUserPage} / {totalUserPages}
+                  </span>
+                  <button
+                    type="button"
+                    disabled={safeUserPage >= totalUserPages}
+                    onClick={() => setUserPage((p) => Math.min(totalUserPages, p + 1))}
+                    className="rounded border border-slate-200 px-2.5 py-1 disabled:opacity-40 dark:border-slate-700"
+                  >
+                    Next
+                  </button>
+                </div>
+              )}
+            </section>
+          </div>
+        )}
+
+        {/* VIEW 5: READY-MADE INDUSTRY TEMPLATES CATALOG */}
+        {section === 'templates' && (
+          <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+            {BUSINESS_INDUSTRY_TEMPLATES.map((tpl) => {
+              const activeTenantsUsing = businesses.filter((b) => b.templateId === tpl.id).length;
+              return (
+                <div
+                  key={tpl.id}
+                  className="space-y-3 rounded-xl border border-slate-200 bg-white p-5 dark:border-slate-800 dark:bg-slate-900"
+                >
+                  <div className="flex items-start justify-between gap-2">
+                    <div>
+                      <h2 className="font-display text-sm font-bold text-slate-900 dark:text-slate-100">
+                        {tpl.name}
+                      </h2>
+                      <p className="text-xs text-teal-700 dark:text-teal-400">{tpl.tagline}</p>
+                    </div>
+                    <span className="font-mono text-[11px] font-semibold text-slate-500">
+                      {activeTenantsUsing} tenant{activeTenantsUsing === 1 ? '' : 's'}
+                    </span>
+                  </div>
+                  <p className="text-xs text-slate-600 dark:text-slate-400">{tpl.description}</p>
+                  <div className="grid grid-cols-2 gap-2 rounded-lg bg-slate-50 p-3 font-mono text-[11px] text-slate-700 dark:bg-slate-800/60 dark:text-slate-300">
+                    <div>Modules: {tpl.installedModuleIds.length}</div>
+                    <div>Layout: {tpl.layoutConfig.layoutMode}</div>
+                    <div>Categories: {tpl.catalogTaxonomy.length}</div>
+                    <div>Starter SKUs: {tpl.starterProducts.length}</div>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        )}
+
+        {/* VIEW 6: SUBSCRIPTIONS & INVOICES */}
+        {section === 'subscriptions' && (
+          <div className="space-y-6">
+            <section className="rounded-xl border border-slate-200 bg-white p-5 dark:border-slate-800 dark:bg-slate-900">
+              <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-200 pb-3 dark:border-slate-800">
+                <div>
+                  <h2 className="font-display text-sm font-bold text-slate-900 dark:text-slate-100">
+                    SaaS Subscription Plans &amp; Branch Quotas
+                  </h2>
+                  <p className="text-xs text-slate-500 dark:text-slate-400">
+                    Configure monthly KES/USD pricing, branch limits, and user caps applied to new and renewing businesses.
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  onClick={handleSavePlansClick}
+                  className="inline-flex items-center gap-1.5 rounded-lg bg-teal-700 px-3.5 py-2 text-xs font-semibold text-white hover:bg-teal-800 dark:bg-teal-600"
+                >
+                  <Save className="h-3.5 w-3.5" />
+                  <span>Save Plan Pricing</span>
+                </button>
+              </div>
+
+              <div className="mt-4 grid grid-cols-1 gap-4 md:grid-cols-2 lg:grid-cols-4">
+                {editablePlans.map((plan, idx) => (
+                  <div
+                    key={plan.id}
+                    className="space-y-2.5 rounded-lg border border-slate-200 bg-slate-50/70 p-4 text-xs dark:border-slate-800 dark:bg-slate-950/50"
+                  >
+                    <div className="flex items-center justify-between">
+                      <span className="font-display font-bold text-slate-900 dark:text-slate-100">
+                        {plan.name}
+                      </span>
+                      <span className="font-mono text-[11px] text-slate-500">{plan.id}</span>
+                    </div>
+                    <p className="text-[11px] text-slate-500 dark:text-slate-400">{plan.tagline}</p>
+
+                    <div className="grid grid-cols-2 gap-2">
+                      <label className="block">
+                        <span className="text-[11px] text-slate-500">KES / mo</span>
+                        <input
+                          type="number"
+                          min={0}
+                          value={plan.monthlyPriceKes}
+                          onChange={(e) => {
+                            const val = Math.max(0, Number(e.target.value) || 0);
+                            setEditablePlans((prev) =>
+                              prev.map((p, i) => (i === idx ? { ...p, monthlyPriceKes: val } : p))
+                            );
+                          }}
+                          className="mt-0.5 w-full rounded border border-slate-200 bg-white px-2 py-1 font-mono text-xs dark:border-slate-700 dark:bg-slate-900"
+                        />
+                      </label>
+                      <label className="block">
+                        <span className="text-[11px] text-slate-500">USD / mo</span>
+                        <input
+                          type="number"
+                          min={0}
+                          value={plan.monthlyPriceUsd}
+                          onChange={(e) => {
+                            const val = Math.max(0, Number(e.target.value) || 0);
+                            setEditablePlans((prev) =>
+                              prev.map((p, i) => (i === idx ? { ...p, monthlyPriceUsd: val } : p))
+                            );
+                          }}
+                          className="mt-0.5 w-full rounded border border-slate-200 bg-white px-2 py-1 font-mono text-xs dark:border-slate-700 dark:bg-slate-900"
+                        />
+                      </label>
+                      <label className="block">
+                        <span className="text-[11px] text-slate-500">Branch Limit</span>
+                        <input
+                          type="number"
+                          min={1}
+                          value={plan.branchLimit}
+                          onChange={(e) => {
+                            const val = Math.max(1, Number(e.target.value) || 1);
+                            setEditablePlans((prev) =>
+                              prev.map((p, i) => (i === idx ? { ...p, branchLimit: val } : p))
+                            );
+                          }}
+                          className="mt-0.5 w-full rounded border border-slate-200 bg-white px-2 py-1 font-mono text-xs dark:border-slate-700 dark:bg-slate-900"
+                        />
+                      </label>
+                      <label className="block">
+                        <span className="text-[11px] text-slate-500">User Limit</span>
+                        <input
+                          type="number"
+                          min={1}
+                          value={plan.userLimit}
+                          onChange={(e) => {
+                            const val = Math.max(1, Number(e.target.value) || 1);
+                            setEditablePlans((prev) =>
+                              prev.map((p, i) => (i === idx ? { ...p, userLimit: val } : p))
+                            );
+                          }}
+                          className="mt-0.5 w-full rounded border border-slate-200 bg-white px-2 py-1 font-mono text-xs dark:border-slate-700 dark:bg-slate-900"
+                        />
+                      </label>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </section>
+
+            <form
+              onSubmit={handleProcessSubscriptionPayment}
+              className="space-y-3 rounded-xl border border-slate-200 bg-white p-5 dark:border-slate-800 dark:bg-slate-900"
+            >
+              <div className="flex items-center gap-2 text-xs font-semibold text-slate-900 dark:text-slate-100">
+                <CreditCard className="h-4 w-4 text-teal-700 dark:text-teal-400" />
+                <span>Collect / Settle Tenant Subscription Payment</span>
+              </div>
+              <div className="grid grid-cols-1 gap-3 sm:grid-cols-5">
+                <select
+                  value={payBizId}
+                  onChange={(e) => setPayBizId(e.target.value)}
+                  className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-xs dark:border-slate-700 dark:bg-slate-800"
+                >
+                  {businesses.map((b) => (
+                    <option key={b.id} value={b.id}>
+                      {b.name} (/{b.slug})
+                    </option>
+                  ))}
+                </select>
+                <select
+                  value={payPlanId}
+                  onChange={(e) => setPayPlanId(e.target.value as SubscriptionPlanId)}
+                  className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-xs dark:border-slate-700 dark:bg-slate-800"
+                >
+                  {editablePlans.map((p) => (
+                    <option key={p.id} value={p.id}>
+                      {p.name} · KES {p.monthlyPriceKes.toLocaleString()}
+                    </option>
+                  ))}
+                </select>
+                <select
+                  value={payGatewayId}
+                  onChange={(e) => setPayGatewayId(e.target.value)}
+                  className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-xs dark:border-slate-700 dark:bg-slate-800"
+                >
+                  {gateways
+                    .filter((g) => g.enabled)
+                    .map((g) => (
+                      <option key={g.id} value={g.id}>
+                        {g.displayName} ({g.shortcodeOrAccount})
+                      </option>
+                    ))}
+                </select>
+                <input
+                  type="text"
+                  value={payRefInput}
+                  onChange={(e) => setPayRefInput(e.target.value)}
+                  placeholder="M-Pesa / Bank Ref (optional)"
+                  className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 font-mono text-xs dark:border-slate-700 dark:bg-slate-800"
+                />
+                <button
+                  type="submit"
+                  disabled={paying || gateways.filter((g) => g.enabled).length === 0}
+                  className="rounded-lg bg-slate-900 px-4 py-2 text-xs font-semibold text-white hover:bg-slate-800 disabled:opacity-40 dark:bg-teal-600"
+                >
+                  {paying ? 'Settling...' : 'Mark Paid & Renew'}
+                </button>
+              </div>
+            </form>
+
+            <section className="rounded-xl border border-slate-200 bg-white dark:border-slate-800 dark:bg-slate-900">
+              <div className="border-b border-slate-200 px-5 py-3.5 dark:border-slate-800">
+                <h2 className="font-display text-sm font-semibold text-slate-900 dark:text-slate-100">
+                  SaaS Subscription Invoices Ledger
+                </h2>
+              </div>
+              <div className="overflow-x-auto">
+                <table className="w-full text-left text-xs">
+                  <thead>
+                    <tr className="border-b border-slate-200 text-slate-500 dark:border-slate-800 dark:text-slate-400">
+                      <th className="px-5 py-2.5 font-medium">Invoice #</th>
+                      <th className="px-5 py-2.5 font-medium">Business</th>
+                      <th className="px-5 py-2.5 font-medium">Plan &amp; Period</th>
+                      <th className="px-5 py-2.5 font-medium">Collection Gateway</th>
+                      <th className="px-5 py-2.5 text-right font-medium">Amount</th>
+                      <th className="px-5 py-2.5 font-medium">Status</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
+                    {subscriptionInvoices.map((inv) => (
+                      <tr key={inv.id} className="hover:bg-slate-50 dark:hover:bg-slate-800/40">
+                        <td className="px-5 py-3 font-mono font-semibold text-slate-800 dark:text-slate-200">
+                          {inv.invoiceNo}
+                        </td>
+                        <td className="px-5 py-3">
+                          <p className="font-semibold text-slate-900 dark:text-slate-100">
+                            {inv.businessName}
+                          </p>
+                          <p className="font-mono text-[11px] text-slate-500">
+                            misafarms.com/{inv.businessSlug}
+                          </p>
+                        </td>
+                        <td className="px-5 py-3">
+                          <span className="font-medium text-slate-800 dark:text-slate-200">
+                            {inv.planId}
+                          </span>
+                          <span className="ml-1.5 text-slate-500">· {inv.periodLabel}</span>
+                        </td>
+                        <td className="px-5 py-3">
+                          <p className="text-slate-700 dark:text-slate-300">{inv.paymentMethod}</p>
+                          <p className="font-mono text-[11px] text-slate-400">Ref: {inv.paymentRef}</p>
+                        </td>
+                        <td className="px-5 py-3 text-right font-mono font-semibold tabular-nums">
+                          {inv.currency} {inv.amount.toLocaleString()}
+                        </td>
+                        <td className="px-5 py-3">
+                          <span
+                            className={`rounded px-2 py-0.5 text-[11px] font-semibold uppercase ${
+                              inv.status === 'paid'
+                                ? 'bg-emerald-50 text-emerald-700 dark:bg-emerald-950/60 dark:text-emerald-300'
+                                : inv.status === 'overdue'
+                                  ? 'bg-rose-50 text-rose-700 dark:bg-rose-950/60 dark:text-rose-300'
+                                  : 'bg-amber-50 text-amber-800 dark:bg-amber-950/60 dark:text-amber-300'
+                            }`}
+                          >
+                            {inv.status}
+                          </span>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </section>
+          </div>
+        )}
+
+        {/* VIEW 7: SAAS PAYMENT GATEWAYS CONFIG */}
+        {section === 'payment_config' && (
+          <div className="space-y-6">
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <div>
+                <h2 className="font-display text-base font-bold text-slate-900 dark:text-slate-100">
+                  SaaS Subscription Payment Gateways Configuration
+                </h2>
+                <p className="mt-0.5 text-xs text-slate-600 dark:text-slate-400">
+                  Integrate and manage Paybills, Tills, Card processors, and Bank EFT rails businesses pay subscriptions with. Secret keys are write-only and stored strictly server-side.
+                </p>
+              </div>
               <button
-                type="submit"
-                className="inline-flex items-center justify-center gap-1.5 rounded-lg bg-slate-900 px-3 py-2 text-xs font-semibold text-white hover:bg-slate-800 dark:bg-teal-600"
+                type="button"
+                onClick={handleSaveGatewaysClick}
+                disabled={savingGateways}
+                className="inline-flex items-center gap-1.5 rounded-lg bg-teal-700 px-4 py-2 text-xs font-semibold text-white hover:bg-teal-800 disabled:opacity-50 dark:bg-teal-600"
               >
-                <Plus className="h-3.5 w-3.5" />
-                <span>Add Gateway</span>
+                <Save className="h-3.5 w-3.5" />
+                <span>{savingGateways ? 'Saving...' : 'Save SaaS Payment Config'}</span>
               </button>
             </div>
-            <input
-              type="text"
-              value={customGwCurrencies}
-              onChange={(e) => setCustomGwCurrencies(e.target.value)}
-              placeholder="Supported Currencies (comma-separated, e.g. KES, USD, UGX)"
-              className="w-full max-w-md rounded-lg border border-slate-200 bg-slate-50 px-3 py-1.5 font-mono text-xs dark:border-slate-700 dark:bg-slate-800"
-            />
-          </form>
+
+            <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
+              {gateways.map((gw) => (
+                <div
+                  key={gw.id}
+                  className="space-y-3 rounded-xl border border-slate-200 bg-white p-5 dark:border-slate-800 dark:bg-slate-900"
+                >
+                  <div className="flex items-start justify-between gap-3">
+                    <div>
+                      <div className="flex items-center gap-2">
+                        <h3 className="font-display text-sm font-bold text-slate-900 dark:text-slate-100">
+                          {gw.displayName}
+                        </h3>
+                        <span
+                          className={`rounded px-2 py-0.5 text-[10px] font-semibold ${
+                            gw.environment === 'Production'
+                              ? 'bg-emerald-50 text-emerald-700 dark:bg-emerald-950/60 dark:text-emerald-300'
+                              : 'bg-amber-50 text-amber-800 dark:bg-amber-950/60 dark:text-amber-300'
+                          }`}
+                        >
+                          {gw.environment}
+                        </span>
+                      </div>
+                      <p className="mt-0.5 text-[11px] text-slate-500 dark:text-slate-400">
+                        {gw.mode} · Currencies: {gw.currencies.join(', ')} · {gw.settlementSchedule}
+                      </p>
+                    </div>
+
+                    <label className="inline-flex cursor-pointer items-center gap-2 text-xs font-semibold">
+                      <input
+                        type="checkbox"
+                        checked={gw.enabled}
+                        onChange={(e) =>
+                          setGateways((prev) =>
+                            prev.map((item) =>
+                              item.id === gw.id ? { ...item, enabled: e.target.checked } : item
+                            )
+                          )
+                        }
+                        className="rounded border-slate-300 text-teal-700"
+                      />
+                      <span className={gw.enabled ? 'text-teal-700 dark:text-teal-400' : 'text-slate-400'}>
+                        {gw.enabled ? 'Enabled' : 'Disabled'}
+                      </span>
+                    </label>
+                  </div>
+
+                  <div className="grid grid-cols-2 gap-2.5 text-xs">
+                    <label className="block">
+                      <span className="text-[11px] font-medium text-slate-600 dark:text-slate-400">
+                        Paybill / Till / Merchant ID
+                      </span>
+                      <input
+                        type="text"
+                        value={gw.shortcodeOrAccount}
+                        onChange={(e) =>
+                          setGateways((prev) =>
+                            prev.map((item) =>
+                              item.id === gw.id
+                                ? { ...item, shortcodeOrAccount: e.target.value }
+                                : item
+                            )
+                          )
+                        }
+                        className="mt-1 w-full rounded-lg border border-slate-200 bg-slate-50 px-2.5 py-1.5 font-mono text-xs dark:border-slate-700 dark:bg-slate-800"
+                      />
+                    </label>
+
+                    <label className="block">
+                      <span className="text-[11px] font-medium text-slate-600 dark:text-slate-400">
+                        Account Reference Prefix
+                      </span>
+                      <input
+                        type="text"
+                        value={gw.accountPrefix}
+                        onChange={(e) =>
+                          setGateways((prev) =>
+                            prev.map((item) =>
+                              item.id === gw.id ? { ...item, accountPrefix: e.target.value } : item
+                            )
+                          )
+                        }
+                        className="mt-1 w-full rounded-lg border border-slate-200 bg-slate-50 px-2.5 py-1.5 font-mono text-xs dark:border-slate-700 dark:bg-slate-800"
+                      />
+                    </label>
+
+                    <label className="block">
+                      <span className="text-[11px] font-medium text-slate-600 dark:text-slate-400">
+                        Environment
+                      </span>
+                      <select
+                        value={gw.environment}
+                        onChange={(e) =>
+                          setGateways((prev) =>
+                            prev.map((item) =>
+                              item.id === gw.id
+                                ? {
+                                    ...item,
+                                    environment: e.target.value as 'Production' | 'Sandbox',
+                                  }
+                                : item
+                            )
+                          )
+                        }
+                        className="mt-1 w-full rounded-lg border border-slate-200 bg-slate-50 px-2.5 py-1.5 text-xs dark:border-slate-700 dark:bg-slate-800"
+                      >
+                        <option value="Production">Production</option>
+                        <option value="Sandbox">Sandbox</option>
+                      </select>
+                    </label>
+
+                    <label className="block">
+                      <span className="text-[11px] font-medium text-slate-600 dark:text-slate-400">
+                        Settlement Schedule
+                      </span>
+                      <input
+                        type="text"
+                        value={gw.settlementSchedule}
+                        onChange={(e) =>
+                          setGateways((prev) =>
+                            prev.map((item) =>
+                              item.id === gw.id
+                                ? { ...item, settlementSchedule: e.target.value }
+                                : item
+                            )
+                          )
+                        }
+                        className="mt-1 w-full rounded-lg border border-slate-200 bg-slate-50 px-2.5 py-1.5 text-xs dark:border-slate-700 dark:bg-slate-800"
+                      />
+                    </label>
+                  </div>
+
+                  <label className="block text-xs">
+                    <span className="text-[11px] font-medium text-slate-600 dark:text-slate-400">
+                      Webhook / IPN Callback URL
+                    </span>
+                    <input
+                      type="text"
+                      value={gw.webhookUrl}
+                      onChange={(e) =>
+                        setGateways((prev) =>
+                          prev.map((item) =>
+                            item.id === gw.id ? { ...item, webhookUrl: e.target.value } : item
+                          )
+                        )
+                      }
+                      className="mt-1 w-full rounded-lg border border-slate-200 bg-slate-50 px-2.5 py-1.5 font-mono text-[11px] dark:border-slate-700 dark:bg-slate-800"
+                    />
+                  </label>
+
+                  <div className="rounded-lg border border-slate-200 bg-slate-50 p-3 dark:border-slate-800 dark:bg-slate-950/60">
+                    <div className="flex items-center justify-between text-[11px]">
+                      <span className="inline-flex items-center gap-1 font-medium text-slate-700 dark:text-slate-300">
+                        <KeyRound className="h-3.5 w-3.5 text-teal-700 dark:text-teal-400" />
+                        <span>Rotate API Secret / Consumer Passkey (Write-Only)</span>
+                      </span>
+                      <span
+                        className={`font-mono font-semibold ${
+                          gw.hasSecretConfigured ? 'text-emerald-700 dark:text-emerald-400' : 'text-amber-600'
+                        }`}
+                      >
+                        {gw.hasSecretConfigured ? 'Configured Server-Side' : 'Not Rotated'}
+                      </span>
+                    </div>
+                    <input
+                      type="password"
+                      value={secretInputs[gw.id] || ''}
+                      onChange={(e) =>
+                        setSecretInputs((prev) => ({ ...prev, [gw.id]: e.target.value }))
+                      }
+                      placeholder="Enter new secret/passkey to rotate on server..."
+                      className="mt-1.5 w-full rounded border border-slate-200 bg-white px-2.5 py-1.5 font-mono text-xs dark:border-slate-700 dark:bg-slate-900"
+                    />
+                  </div>
+                </div>
+              ))}
+            </div>
+
+            <form
+              onSubmit={handleAddCustomGateway}
+              className="space-y-3 rounded-xl border border-slate-200 bg-white p-5 dark:border-slate-800 dark:bg-slate-900"
+            >
+              <h3 className="font-display text-sm font-bold text-slate-900 dark:text-slate-100">
+                Integrate Additional SaaS Collection Gateway
+              </h3>
+              <div className="grid grid-cols-1 gap-2.5 sm:grid-cols-5">
+                <input
+                  type="text"
+                  required
+                  value={customGwName}
+                  onChange={(e) => setCustomGwName(e.target.value)}
+                  placeholder="Gateway Name (e.g. Flutterwave / Jenga)"
+                  className="sm:col-span-2 rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-xs dark:border-slate-700 dark:bg-slate-800"
+                />
+                <select
+                  value={customGwMode}
+                  onChange={(e) => setCustomGwMode(e.target.value as PlatformBillingGateway['mode'])}
+                  className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-xs dark:border-slate-700 dark:bg-slate-800"
+                >
+                  <option value="Paybill">Paybill</option>
+                  <option value="Merchant Till">Merchant Till</option>
+                  <option value="Card & Mobile">Card &amp; Mobile</option>
+                  <option value="International Card">International Card</option>
+                  <option value="Bank EFT / RTGS">Bank EFT / RTGS</option>
+                  <option value="Custom">Custom Rail</option>
+                </select>
+                <input
+                  type="text"
+                  value={customGwAccount}
+                  onChange={(e) => setCustomGwAccount(e.target.value)}
+                  placeholder="Merchant ID / Account #"
+                  className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 font-mono text-xs dark:border-slate-700 dark:bg-slate-800"
+                />
+                <button
+                  type="submit"
+                  className="inline-flex items-center justify-center gap-1.5 rounded-lg bg-slate-900 px-3 py-2 text-xs font-semibold text-white hover:bg-slate-800 dark:bg-teal-600"
+                >
+                  <Plus className="h-3.5 w-3.5" />
+                  <span>Add Gateway</span>
+                </button>
+              </div>
+              <input
+                type="text"
+                value={customGwCurrencies}
+                onChange={(e) => setCustomGwCurrencies(e.target.value)}
+                placeholder="Supported Currencies (comma-separated, e.g. KES, USD, UGX)"
+                className="w-full max-w-md rounded-lg border border-slate-200 bg-slate-50 px-3 py-1.5 font-mono text-xs dark:border-slate-700 dark:bg-slate-800"
+              />
+            </form>
+          </div>
+        )}
+      </div>
+
+      {/* Zero-Trust Support Access Request Modal */}
+      {accessModalBiz && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/60 p-4 backdrop-blur-xs">
+          <div className="w-full max-w-md rounded-xl border border-slate-200 bg-white p-6 shadow-xl dark:border-slate-800 dark:bg-slate-900">
+            <div className="flex items-center justify-between border-b border-slate-200 pb-3 dark:border-slate-800">
+              <div className="flex items-center gap-2">
+                <Lock className="h-4 w-4 text-teal-700 dark:text-teal-400" />
+                <h3 className="font-display text-sm font-bold text-slate-900 dark:text-slate-100">
+                  Request Tenant Support Access
+                </h3>
+              </div>
+              <button
+                type="button"
+                onClick={() => setAccessModalBiz(null)}
+                className="rounded p-1 text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800"
+              >
+                <X className="h-4 w-4" />
+              </button>
+            </div>
+
+            <form onSubmit={handleSubmitAccessRequest} className="mt-4 space-y-3 text-xs">
+              <p className="text-slate-600 dark:text-slate-400">
+                Request time-limited diagnostic access for <strong>{accessModalBiz.name}</strong> (
+                <span className="font-mono">misafarms.com/{accessModalBiz.slug}</span>). Personal details and workspace navigation stay locked until the Business Owner clicks Approve.
+              </p>
+
+              <label className="block">
+                <span className="font-medium text-slate-700 dark:text-slate-300">
+                  Support Reason (Shown to Business Owner)
+                </span>
+                <input
+                  type="text"
+                  required
+                  value={accessReason}
+                  onChange={(e) => setAccessReason(e.target.value)}
+                  className="mt-1 w-full rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-slate-900 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-100"
+                />
+              </label>
+
+              <label className="block">
+                <span className="font-medium text-slate-700 dark:text-slate-300">
+                  Access Duration Window
+                </span>
+                <select
+                  value={accessDurationHours}
+                  onChange={(e) => setAccessDurationHours(Number(e.target.value))}
+                  className="mt-1 w-full rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-slate-900 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-100"
+                >
+                  <option value={2}>2 Hours (Quick Fix)</option>
+                  <option value={4}>4 Hours (Standard Support)</option>
+                  <option value={24}>24 Hours (Migration / Setup)</option>
+                </select>
+              </label>
+
+              <div className="flex justify-end gap-2 pt-2">
+                <button
+                  type="button"
+                  onClick={() => setAccessModalBiz(null)}
+                  className="rounded-lg border border-slate-200 px-4 py-2 font-medium text-slate-700 dark:border-slate-700 dark:text-slate-200"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  disabled={submittingAccess}
+                  className="rounded-lg bg-teal-700 px-4 py-2 font-semibold text-white hover:bg-teal-800 disabled:opacity-50"
+                >
+                  {submittingAccess ? 'Sending Request...' : 'Send Consent Request'}
+                </button>
+              </div>
+            </form>
+          </div>
         </div>
       )}
     </div>

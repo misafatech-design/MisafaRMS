@@ -8,6 +8,7 @@ interface TopBarProps {
   onOpenWizard: () => void;
   onGoLanding: () => void;
   showSuperAdmin?: boolean;
+  allowedTabs?: PrimaryWorkspaceTab[];
 }
 
 export const TopBar: React.FC<TopBarProps> = ({
@@ -16,14 +17,18 @@ export const TopBar: React.FC<TopBarProps> = ({
   onOpenWizard,
   onGoLanding,
   showSuperAdmin = true,
+  allowedTabs,
 }) => {
-  const navItems: Array<{ id: PrimaryWorkspaceTab; label: string }> = [
+  const rawItems: Array<{ id: PrimaryWorkspaceTab; label: string }> = [
     { id: 'apps', label: 'Apps' },
     { id: 'pos', label: 'Point of Sale' },
     { id: 'etims', label: 'eTIMS & Tax' },
     { id: 'analytics', label: 'Analytics' },
     ...(showSuperAdmin ? ([{ id: 'super_admin', label: 'Super Admin' }] as const) : []),
   ];
+  const navItems = allowedTabs
+    ? rawItems.filter((item) => allowedTabs.includes(item.id))
+    : rawItems;
 
   return (
     <header className="sticky top-0 z-30 border-b border-slate-200 bg-white/95 backdrop-blur-sm dark:border-slate-800 dark:bg-slate-950/95">

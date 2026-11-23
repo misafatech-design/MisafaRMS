@@ -8,6 +8,7 @@ interface AppLauncherProps {
   activeBusiness: BusinessEntity;
   activeStore: StoreBranch;
   accountTier: AccountTier;
+  allowedModuleIds?: string[] | null;
   onLaunchModule: (mod: AppModuleMeta) => void;
   onToggleInstallModule: (moduleId: string) => Promise<void>;
   totalSalesToday: number;
@@ -20,6 +21,7 @@ export const AppLauncher: React.FC<AppLauncherProps> = ({
   activeBusiness,
   activeStore,
   accountTier,
+  allowedModuleIds,
   onLaunchModule,
   onToggleInstallModule,
   totalSalesToday,
@@ -35,10 +37,16 @@ export const AppLauncher: React.FC<AppLauncherProps> = ({
   const visibleModulesPool = useMemo(() => {
     return APP_MODULES.filter((mod) => {
       if (accountTier === 'user') return Boolean(mod.portalVisible);
-      if (accountTier === 'employee') return !mod.adminOnly;
-      return true; // Business Admin sees all 50 modules
+      if (accountTier === 'employee') {
+        if (mod.adminOnly) return false;
+        if (Array.isArray(allowedModuleIds)) {
+          return allowedModuleIds.includes(mod.id);
+        }
+        return true;
+      }
+      return true; // Business Owner / Admin sees all 50+ modules
     });
-  }, [accountTier]);
+  }, [accountTier, allowedModuleIds]);
 
   const categoryCounts = useMemo(() => {
     const counts: Record<string, number> = { All: visibleModulesPool.length };
@@ -167,17 +175,19 @@ export const AppLauncher: React.FC<AppLauncherProps> = ({
                 </p>
               </div>
               <div className="flex items-center gap-2">
-                <button
-                  type="button"
-                  onClick={() => {
-                    const posMod = APP_MODULES.find((m) => m.id === 'pos');
-                    if (posMod) onLaunchModule(posMod);
-                  }}
-                  className="inline-flex items-center gap-1.5 rounded-lg bg-teal-700 px-3.5 py-2 text-xs font-semibold text-white transition-colors hover:bg-teal-800 whitespace-nowrap shrink-0 dark:bg-teal-600 dark:hover:bg-teal-500"
-                >
-                  <span>Open POS</span>
-                  <ArrowRight className="h-3.5 w-3.5" />
-                </button>
+                {(accountTier === 'admin' || !Array.isArray(allowedModuleIds) || allowedModuleIds.includes('pos')) && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const posMod = APP_MODULES.find((m) => m.id === 'pos');
+                      if (posMod) onLaunchModule(posMod);
+                    }}
+                    className="inline-flex items-center gap-1.5 rounded-lg bg-teal-700 px-3.5 py-2 text-xs font-semibold text-white transition-colors hover:bg-teal-800 whitespace-nowrap shrink-0 dark:bg-teal-600 dark:hover:bg-teal-500"
+                  >
+                    <span>Open POS</span>
+                    <ArrowRight className="h-3.5 w-3.5" />
+                  </button>
+                )}
                 {accountTier === 'admin' && (
                   <button
                     type="button"
@@ -203,15 +213,15 @@ export const AppLauncher: React.FC<AppLauncherProps> = ({
             {accountTier === 'admin'
               ? 'Apps Catalog & Module Manager'
               : accountTier === 'employee'
-                ? 'Employee Operational Workspace'
+                ? 'Permitted Employee Workspace'
                 : 'Customer & B2B Self-Service Portal'}
           </h1>
           <p className="text-xs text-slate-500 dark:text-slate-400">
             {filteredModules.length} of {visibleModulesPool.length} accessible apps ·{' '}
             {accountTier === 'admin'
-              ? 'Admin mode: Install/uninstall modules and configure gateways.'
+              ? 'Business Owner sees all 50+ integrated ERP & POS modules.'
               : accountTier === 'employee'
-                ? 'Employee mode: Admin settings and payroll are restricted.'
+                ? `Scoped to ${visibleModulesPool.length} module(s) granted by Business Admin (unpermitted modules hidden).`
                 : 'Portal User mode: External customer storefront and support only.'}
           </p>
         </div>

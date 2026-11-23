@@ -60,6 +60,9 @@
         "deliveryFee": { "type": "number" },
         "freeDeliveryAbove": { "type": "number" },
         "storefrontPickupEnabled": { "type": "boolean" },
+        "templateId": { "type": "string", "maxLength": 64 },
+        "supportAccess": { "type": "object" },
+        "hardwareConfig": { "type": "object" },
         "createdAt": { "type": "string", "format": "date-time" },
         "updatedAt": { "type": "string", "format": "date-time" }
       },
@@ -201,7 +204,7 @@
         "id": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
         "ownerId": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
         "name": { "type": "string", "minLength": 1, "maxLength": 100 },
-        "role": { "type": "string", "enum": ["Owner", "Store Manager", "Cashier", "Inventory Clerk", "Accountant", "Field Agent"] },
+        "role": { "type": "string", "enum": ["Owner", "Store Manager", "Cashier", "Inventory Clerk", "Accountant", "HR Officer", "Field Agent"] },
         "pinCode": { "type": "string", "minLength": 4, "maxLength": 8, "pattern": "^[0-9]{4,8}$" },
         "branchId": { "type": "string", "minLength": 1, "maxLength": 128 },
         "grossSalary": { "type": "number" },
@@ -210,6 +213,7 @@
         "ratingAvg": { "type": "number" },
         "ratingCount": { "type": "number" },
         "ordersHandled": { "type": "number" },
+        "permissions": { "type": "object" },
         "createdAt": { "type": "string", "format": "date-time" }
       },
       "required": ["id", "ownerId", "name", "role", "pinCode", "branchId", "createdAt"]

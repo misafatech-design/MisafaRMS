@@ -82,6 +82,7 @@ import {
   PlatformBillingGateway,
   PlatformUserRecord,
   PosCustomizationConfig,
+  PosHardwareConfig,
   ProductItem,
   PromoOffer,
   SaleTransaction,
@@ -100,6 +101,8 @@ import {
   WorkflowAutomation,
 } from './types/erp';
 import { decryptOfflinePayload, encryptOfflinePayload } from './utils/cryptoSync';
+import { getDefaultModulesForRole } from './data/businessTemplates';
+import { EmvCardChargeResult } from './utils/posHardware';
 
 const OFFLINE_QUEUE_STORAGE = 'misafarms_encrypted_offline_queue_v1';
 const POS_BINDING_STORAGE = 'misafarms_pos_binding_v1';
@@ -662,6 +665,60 @@ function MisafaWorkspaceApp() {
     setActiveEmployee(firstEmp || null);
   };
 
+  const allowedModuleIds = useMemo<string[] | null>(() => {
+    if (accountTier === 'admin') return null;
+    if (accountTier === 'user') return null;
+    if (
+      activeEmployee &&
+      activeEmployee.role === activeRole &&
+      activeEmployee.permissions.allowedModuleIds
+    ) {
+      return activeEmployee.permissions.allowedModuleIds;
+    }
+    return getDefaultModulesForRole(activeRole);
+  }, [accountTier, activeEmployee, activeRole]);
+
+  const isEmployeeModuleAllowed = useCallback(
+    (mod: AppModuleMeta) => {
+      if (accountTier === 'admin') return true;
+      if (accountTier === 'user') return mod.portalVisible;
+      if (mod.adminOnly) return false;
+      return allowedModuleIds ? allowedModuleIds.includes(mod.id) : true;
+    },
+    [accountTier, allowedModuleIds]
+  );
+
+  const allowedTopTabs = useMemo<PrimaryWorkspaceTab[]>(() => {
+    if (accountTier === 'admin') {
+      return ['apps', 'pos', 'etims', 'analytics', 'super_admin'];
+    }
+    if (accountTier === 'user') return ['apps'];
+    const tabs: PrimaryWorkspaceTab[] = ['apps'];
+    const list = allowedModuleIds || getDefaultModulesForRole(activeRole);
+    if (list.includes('pos')) tabs.push('pos');
+    if (list.includes('etims')) tabs.push('etims');
+    if (list.includes('analytics')) tabs.push('analytics');
+    return tabs;
+  }, [accountTier, allowedModuleIds, activeRole]);
+
+  const handleSelectRoleGuarded = (role: UserRole) => {
+    setActiveRole(role);
+    const matchingEmp = businessEmployees.find((e) => e.active && e.role === role);
+    if (matchingEmp) {
+      setActiveEmployee(matchingEmp);
+    }
+    if (accountTier === 'employee') {
+      const nextAllowed =
+        matchingEmp?.permissions.allowedModuleIds || getDefaultModulesForRole(role);
+      if (selectedModule && (selectedModule.adminOnly || !nextAllowed.includes(selectedModule.id))) {
+        setSelectedModule(null);
+      }
+      if (topTab !== 'apps' && !nextAllowed.includes(topTab)) {
+        setTopTab('apps');
+      }
+    }
+  };
+
   const handleSelectAccountTier = (tier: AccountTier) => {
     setAccountTier(tier);
     if (tier === 'user') {
@@ -670,9 +727,19 @@ function MisafaWorkspaceApp() {
         setSelectedModule(null);
       }
     } else if (tier === 'employee') {
+      const nextRole = activeRole === 'Owner' ? 'Cashier' : activeRole;
       if (activeRole === 'Owner') setActiveRole('Cashier');
-      if (selectedModule?.adminOnly || topTab === 'super_admin') {
+      const empForRole =
+        businessEmployees.find((e) => e.active && e.role === nextRole) || activeEmployee;
+      const nextAllowed =
+        empForRole?.permissions.allowedModuleIds || getDefaultModulesForRole(nextRole);
+      if (
+        selectedModule &&
+        (selectedModule.adminOnly || !nextAllowed.includes(selectedModule.id))
+      ) {
         setSelectedModule(null);
+      }
+      if (topTab === 'super_admin' || (topTab !== 'apps' && !nextAllowed.includes(topTab))) {
         setTopTab('apps');
       }
     } else {
@@ -740,6 +807,9 @@ function MisafaWorkspaceApp() {
             freeDeliveryAbove: biz.freeDeliveryAbove,
             storefrontPickupEnabled: biz.storefrontPickupEnabled,
             installedModuleIds: biz.installedModuleIds,
+            templateId: biz.templateId,
+            supportAccess: biz.supportAccess,
+            hardwareConfig: biz.hardwareConfig,
             posConfig: biz.posConfig,
             paymentGateways: biz.paymentGateways,
             layoutConfig: biz.layoutConfig,
@@ -1167,6 +1237,36 @@ function MisafaWorkspaceApp() {
     await updateBusinessConfig({ posConfig });
   };
 
+  const handleUpdateHardwareConfig = async (hardwareConfig: PosHardwareConfig) => {
+    await updateBusinessConfig({ hardwareConfig });
+  };
+
+  const handleApplyIndustryTemplate = async (
+    templateId: string,
+    seedStarterProducts: boolean
+  ) => {
+    const res = await fetch(`/api/businesses/${activeBusiness.id}/apply-template`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        templateId,
+        seedStarterProducts,
+        storeId: activeStore?.id,
+      }),
+    });
+    if (res.ok) {
+      const data = await res.json();
+      setBusinesses((prev) =>
+        prev.map((b) => (b.id === activeBusiness.id ? data.business : b))
+      );
+      if (Array.isArray(data.products) && data.products.length > 0) {
+        setProducts(data.products);
+      }
+      if (data.auditLog) setAuditLogs((prev) => [data.auditLog, ...prev]);
+      await syncBusinessDocToCloud(data.business);
+    }
+  };
+
   const handleUpdateGateways = async (paymentGateways: PaymentGatewayConfig[]) => {
     await updateBusinessConfig({ paymentGateways });
   };
@@ -1181,6 +1281,88 @@ function MisafaWorkspaceApp() {
 
   const handleUpdateOffers = async (offers: PromoOffer[]) => {
     await updateBusinessConfig({ offers });
+  };
+
+  const handleRequestSupportAccess = async (
+    businessId: string,
+    reason: string,
+    durationHours: number
+  ) => {
+    const res = await fetch(`/api/super-admin/businesses/${businessId}/request-access`, {
+      method: 'POST',
+      headers: ensureSuperAdminHeaders(),
+      body: JSON.stringify({
+        reason,
+        durationHours,
+        requestedBy: firebaseUser?.email || 'Platform Super Admin',
+      }),
+    });
+    if (res.ok) {
+      const data = await res.json();
+      setBusinesses((prev) => prev.map((b) => (b.id === businessId ? data.business : b)));
+      if (data.auditLog) setAuditLogs((prev) => [data.auditLog, ...prev]);
+    }
+  };
+
+  const handleRespondSupportAccess = async (
+    decision: 'approve' | 'deny' | 'revoke' | 'grant',
+    durationHours = 4
+  ) => {
+    const res = await fetch(`/api/businesses/${activeBusiness.id}/support-access`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        decision,
+        durationHours,
+        respondedBy: firebaseUser?.email || activeEmployee?.name || activeBusiness.ownerName || 'Owner',
+      }),
+    });
+    if (res.ok) {
+      const data = await res.json();
+      setBusinesses((prev) =>
+        prev.map((b) => (b.id === activeBusiness.id ? data.business : b))
+      );
+      if (data.auditLog) setAuditLogs((prev) => [data.auditLog, ...prev]);
+      await syncBusinessDocToCloud(data.business);
+    }
+  };
+
+  const handleChargeCardTerminal = async (payload: {
+    provider: string;
+    terminalId: string;
+    amount: number;
+    cardScheme: 'VISA' | 'MASTERCARD';
+    cvmMethod: 'NFC Contactless' | 'EMV Chip + PIN';
+  }): Promise<EmvCardChargeResult | null> => {
+    const res = await fetch('/api/pos/card-terminal/charge', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        ...payload,
+        businessId: activeBusiness.id,
+        storeId: activeStore.id,
+      }),
+    });
+    if (!res.ok) return null;
+    return (await res.json()) as EmvCardChargeResult;
+  };
+
+  const handleHardwareLog = async (event: string, detail: string) => {
+    const res = await fetch('/api/pos/hardware/log', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        businessId: activeBusiness.id,
+        storeId: activeStore?.id,
+        event,
+        detail,
+        actor: activeEmployee?.name || activeRole,
+      }),
+    });
+    if (res.ok) {
+      const data = await res.json();
+      if (data.auditLog) setAuditLogs((prev) => [data.auditLog, ...prev]);
+    }
   };
 
   const handleSlotStatusChange = async (
@@ -1354,6 +1536,9 @@ function MisafaWorkspaceApp() {
   };
 
   const handleLaunchModule = (mod: AppModuleMeta) => {
+    if (!isEmployeeModuleAllowed(mod)) {
+      return;
+    }
     if (mod.specialView === 'pos') {
       setSelectedModule(null);
       setTopTab('pos');
@@ -1374,8 +1559,9 @@ function MisafaWorkspaceApp() {
   };
 
   const handleSelectTopTab = (tab: PrimaryWorkspaceTab) => {
-    if (accountTier === 'user' && tab !== 'apps') {
+    if (!allowedTopTabs.includes(tab)) {
       setTopTab('apps');
+      setSelectedModule(null);
       return;
     }
     setTopTab(tab);
@@ -1385,6 +1571,7 @@ function MisafaWorkspaceApp() {
   const handleCreateBusiness = async (payload: {
     name: string;
     slug: string;
+    templateId?: string;
     subscriptionPlan: SubscriptionPlanId;
     country: 'KE' | 'UG' | 'TZ' | 'GB' | 'US';
     currency: 'KES' | 'UGX' | 'TZS' | 'GBP' | 'USD';
@@ -2341,6 +2528,8 @@ function MisafaWorkspaceApp() {
           }
         }}
         initialLocked={true}
+        onHardwareLog={handleHardwareLog}
+        onChargeCardTerminal={handleChargeCardTerminal}
         onCompleteCheckout={handleCheckout}
         onEmailReceipt={handleEmailReceipt}
       />
@@ -2367,6 +2556,7 @@ function MisafaWorkspaceApp() {
         onOpenWizard={() => setWizardOpen(true)}
         onGoLanding={() => setShowLanding(true)}
         showSuperAdmin={accountTier === 'admin'}
+        allowedTabs={allowedTopTabs}
       />
 
       <WorkspaceToolbar
@@ -2380,7 +2570,7 @@ function MisafaWorkspaceApp() {
         accountTier={accountTier}
         onSelectAccountTier={handleSelectAccountTier}
         activeRole={activeRole}
-        onSelectRole={setActiveRole}
+        onSelectRole={handleSelectRoleGuarded}
         isOffline={isOffline}
         onToggleOffline={() => setIsOffline((v) => !v)}
         offlineQueueCount={encryptedOfflineQueue.length}
@@ -2413,7 +2603,7 @@ function MisafaWorkspaceApp() {
             ...(accountTier === 'admin' ? ([{ id: 'super_admin', label: 'Super Admin' }] as const) : []),
           ] as const
         )
-          .filter((t) => accountTier !== 'user' || t.id === 'apps')
+          .filter((t) => allowedTopTabs.includes(t.id))
           .map((tab) => (
             <button
               key={tab.id}
@@ -2431,6 +2621,38 @@ function MisafaWorkspaceApp() {
       </div>
 
       <main className="mx-auto max-w-[1440px] px-4 py-6 sm:px-6">
+        {accountTier === 'admin' && activeBusiness.supportAccess?.status === 'pending_approval' && (
+          <div className="mb-4 flex flex-wrap items-center justify-between gap-3 rounded-xl border border-amber-300 bg-amber-50 px-4 py-3 text-xs text-amber-950 dark:border-amber-800 dark:bg-amber-950/40 dark:text-amber-200">
+            <div>
+              <p className="font-semibold">
+                Platform Support Access Request from {activeBusiness.supportAccess.requestedByEmail || 'Super Admin'}
+              </p>
+              <p className="mt-0.5 text-amber-800 dark:text-amber-300">
+                Reason: {activeBusiness.supportAccess.reason || 'Tenant troubleshooting'} · Duration:{' '}
+                {activeBusiness.supportAccess.requestedDurationHours || 4} hours. Your private details remain hidden until you approve.
+              </p>
+            </div>
+            <div className="flex items-center gap-2">
+              <button
+                type="button"
+                onClick={() =>
+                  handleRespondSupportAccess('approve', activeBusiness.supportAccess?.requestedDurationHours || 4)
+                }
+                className="rounded-lg bg-teal-700 px-3 py-1.5 font-semibold text-white hover:bg-teal-800 dark:bg-teal-600"
+              >
+                Approve ({activeBusiness.supportAccess.requestedDurationHours || 4}h)
+              </button>
+              <button
+                type="button"
+                onClick={() => handleRespondSupportAccess('deny')}
+                className="rounded-lg border border-rose-300 bg-white px-3 py-1.5 font-semibold text-rose-700 hover:bg-rose-50 dark:border-rose-900 dark:bg-slate-900 dark:text-rose-400"
+              >
+                Deny
+              </button>
+            </div>
+          </div>
+        )}
+
         {authBanner && (
           <div className="mb-4 rounded-lg border border-teal-200 bg-teal-50 px-4 py-2.5 text-xs font-medium text-teal-800 dark:border-teal-900 dark:bg-teal-950/50 dark:text-teal-300">
             {authBanner}
@@ -2443,7 +2665,7 @@ function MisafaWorkspaceApp() {
           </div>
         )}
 
-        {selectedModule ? (
+        {selectedModule && isEmployeeModuleAllowed(selectedModule) ? (
           selectedModule.specialView === 'studio' ? (
             <StudioView
               models={studioModels}
@@ -2460,6 +2682,9 @@ function MisafaWorkspaceApp() {
               employees={businessEmployees}
               attendanceLogs={businessAttendanceLogs}
               onUpdatePosConfig={handleUpdatePosConfig}
+              onUpdateHardwareConfig={handleUpdateHardwareConfig}
+              onApplyTemplate={handleApplyIndustryTemplate}
+              onHardwareLog={handleHardwareLog}
               onUpdateLayoutConfig={handleUpdateLayoutConfig}
               onUpdateTaxonomy={handleUpdateTaxonomy}
               onUpdateOffers={handleUpdateOffers}
@@ -2564,6 +2789,8 @@ function MisafaWorkspaceApp() {
               mode={selectedModule.specialView}
               auditLogs={auditLogs}
               activeRole={activeRole}
+              business={activeBusiness}
+              onRespondSupportAccess={handleRespondSupportAccess}
             />
           ) : (
             <ModuleWorkspace
@@ -2624,6 +2851,7 @@ function MisafaWorkspaceApp() {
               setSelectedModule(null);
               setTopTab('apps');
             }}
+            onRequestSupportAccess={handleRequestSupportAccess}
             onUpdateBusinessSubscription={handleSuperAdminUpdateBusiness}
             onAddBranchToBusiness={handleSuperAdminAddBranch}
             onCreatePlatformUser={handleSuperAdminCreateUser}
@@ -2638,6 +2866,7 @@ function MisafaWorkspaceApp() {
             activeBusiness={activeBusiness}
             activeStore={activeStore}
             accountTier={accountTier}
+            allowedModuleIds={allowedModuleIds}
             onLaunchModule={handleLaunchModule}
             onToggleInstallModule={handleToggleInstallModule}
             totalSalesToday={totalSalesToday}

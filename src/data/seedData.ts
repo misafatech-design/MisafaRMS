@@ -25,6 +25,10 @@ import {
   WorkflowAutomation,
 } from '../types/erp';
 import { APP_MODULES } from './modulesRegistry';
+import {
+  DEFAULT_POS_HARDWARE_CONFIG,
+  getDefaultModulesForRole,
+} from './businessTemplates';
 
 export const DEFAULT_SUBSCRIPTION_PLANS: SubscriptionPlanTier[] = [
   {
@@ -501,7 +505,9 @@ export const SEED_BUSINESSES: BusinessEntity[] = [
     freeDeliveryAbove: 5000,
     storefrontPickupEnabled: true,
     installedModuleIds: ALL_MODULE_IDS,
+    templateId: 'supermarket',
     posConfig: structuredClone(DEFAULT_POS_CONFIG),
+    hardwareConfig: structuredClone(DEFAULT_POS_HARDWARE_CONFIG),
     paymentGateways: structuredClone(DEFAULT_PAYMENT_GATEWAYS),
     layoutConfig: structuredClone(DEFAULT_LAYOUT_CONFIG),
     catalogTaxonomy: structuredClone(DEFAULT_CATALOG_TAXONOMY),
@@ -542,7 +548,9 @@ export const SEED_BUSINESSES: BusinessEntity[] = [
       'payment_gateways',
       'security',
     ],
+    templateId: 'wholesale',
     posConfig: structuredClone(DEFAULT_POS_CONFIG),
+    hardwareConfig: structuredClone(DEFAULT_POS_HARDWARE_CONFIG),
     paymentGateways: structuredClone(DEFAULT_PAYMENT_GATEWAYS),
     layoutConfig: {
       layoutMode: 'retail_shelves',
@@ -616,6 +624,7 @@ export const SEED_BUSINESSES: BusinessEntity[] = [
       receiptHeader: 'ATLAS GLOBAL RETAIL UK · VAT RECEIPT',
       receiptFooter: 'Thank you for shopping with Atlas Global Retail UK.',
     },
+    hardwareConfig: structuredClone(DEFAULT_POS_HARDWARE_CONFIG),
     paymentGateways: structuredClone(DEFAULT_PAYMENT_GATEWAYS),
     layoutConfig: structuredClone(DEFAULT_LAYOUT_CONFIG),
     catalogTaxonomy: [
@@ -654,6 +663,7 @@ export const SEED_EMPLOYEES: EmployeeRecord[] = [
       canViewEtims: true,
       canExportReports: true,
       canManagePayments: false,
+      allowedModuleIds: getDefaultModulesForRole('Store Manager'),
     },
     createdAt: '2026-01-15T08:00:00Z',
   },
@@ -682,6 +692,7 @@ export const SEED_EMPLOYEES: EmployeeRecord[] = [
       canViewEtims: false,
       canExportReports: false,
       canManagePayments: false,
+      allowedModuleIds: getDefaultModulesForRole('Cashier'),
     },
     createdAt: '2026-02-01T08:00:00Z',
   },
@@ -711,6 +722,7 @@ export const SEED_EMPLOYEES: EmployeeRecord[] = [
       canViewEtims: false,
       canExportReports: false,
       canManagePayments: false,
+      allowedModuleIds: getDefaultModulesForRole('Field Agent'),
     },
     createdAt: '2026-02-15T08:00:00Z',
   },
@@ -739,6 +751,7 @@ export const SEED_EMPLOYEES: EmployeeRecord[] = [
       canViewEtims: false,
       canExportReports: true,
       canManagePayments: false,
+      allowedModuleIds: getDefaultModulesForRole('Inventory Clerk'),
     },
     createdAt: '2026-03-01T08:00:00Z',
   },
@@ -768,8 +781,38 @@ export const SEED_EMPLOYEES: EmployeeRecord[] = [
       canViewEtims: true,
       canExportReports: true,
       canManagePayments: false,
+      allowedModuleIds: getDefaultModulesForRole('Accountant'),
     },
     createdAt: '2026-03-10T08:00:00Z',
+  },
+  {
+    id: 'emp-6',
+    businessId: 'biz-savannah',
+    name: 'Faith Akinyi',
+    email: 'faith.hr@misafatech.misafarms.com',
+    role: 'HR Officer',
+    pinCode: '6677',
+    branchId: 'store-nbo-cbd',
+    grossSalary: 115000,
+    active: true,
+    clockedIn: true,
+    lastClockInAt: '2026-11-22T08:00:00Z',
+    tipsEarned: 0,
+    ratingAvg: 5.0,
+    ratingCount: 4,
+    ordersHandled: 0,
+    permissions: {
+      maxDiscountPct: 0,
+      canVoidSale: false,
+      canOpenDrawer: false,
+      canViewCostPrice: false,
+      canEditInventory: false,
+      canViewEtims: false,
+      canExportReports: true,
+      canManagePayments: false,
+      allowedModuleIds: getDefaultModulesForRole('HR Officer'),
+    },
+    createdAt: '2026-03-18T08:00:00Z',
   },
 ];
 

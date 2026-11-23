@@ -1,7 +1,8 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { Check, CheckCircle2, Globe, Loader2, Search, X, AlertCircle } from 'lucide-react';
+import { Check, CheckCircle2, Globe, Layers, Loader2, Search, X, AlertCircle } from 'lucide-react';
 import { BusinessEntity, SubscriptionPlanId, SubscriptionPlanTier } from '../types/erp';
 import { DEFAULT_SUBSCRIPTION_PLANS } from '../data/seedData';
+import { BUSINESS_INDUSTRY_TEMPLATES, getIndustryTemplateById } from '../data/businessTemplates';
 
 interface SlugScanResult {
   slug: string;
@@ -34,6 +35,7 @@ interface OnboardingWizardModalProps {
     ownerEmail: string;
     ownerPin?: string;
     setupMode?: 'clean' | 'starter';
+    templateId?: string;
     ecommerceEnabled?: boolean;
   }) => Promise<void>;
 }
@@ -101,7 +103,8 @@ export const OnboardingWizardModal: React.FC<OnboardingWizardModalProps> = ({
   const [ownerName, setOwnerName] = useState('Joseph Mwangi');
   const [ownerEmail, setOwnerEmail] = useState('owner@enterprise.co.ke');
   const [ownerPin, setOwnerPin] = useState('1234');
-  const [setupMode, setSetupMode] = useState<'clean' | 'starter'>('clean');
+  const [templateId, setTemplateId] = useState<string>('supermarket');
+  const [setupMode, setSetupMode] = useState<'clean' | 'starter'>('starter');
   const [ecommerceEnabled, setEcommerceEnabled] = useState(true);
   const [subscriptionPlan, setSubscriptionPlan] = useState<SubscriptionPlanId>('Trial');
   const [submitting, setSubmitting] = useState(false);
@@ -241,7 +244,8 @@ export const OnboardingWizardModal: React.FC<OnboardingWizardModalProps> = ({
         ownerName: ownerName.trim(),
         ownerEmail: ownerEmail.trim(),
         ownerPin: ownerPin.replace(/[^0-9]/g, '') || '1234',
-        setupMode,
+        setupMode: templateId === 'custom' ? 'clean' : 'starter',
+        templateId,
         ecommerceEnabled,
       });
       setName('');
@@ -258,6 +262,7 @@ export const OnboardingWizardModal: React.FC<OnboardingWizardModalProps> = ({
   };
 
   const selectedPlanObj = plans.find((p) => p.id === subscriptionPlan) || plans[0];
+  const selectedTemplate = getIndustryTemplateById(templateId);
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/60 p-4 backdrop-blur-xs">
@@ -441,28 +446,77 @@ export const OnboardingWizardModal: React.FC<OnboardingWizardModalProps> = ({
           )}
 
           {step === 2 && (
-            <div className="space-y-3">
+            <div className="space-y-4">
               <div>
-                <label className="block text-xs font-medium text-slate-700 dark:text-slate-300">
-                  First Store / Branch Name
-                </label>
-                <input
-                  type="text"
-                  value={branchName}
-                  onChange={(e) => setBranchName(e.target.value)}
-                  className="mt-1 w-full rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-900 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-100"
-                />
+                <div className="flex items-center justify-between">
+                  <label className="inline-flex items-center gap-1.5 text-xs font-semibold text-slate-800 dark:text-slate-200">
+                    <Layers className="h-3.5 w-3.5 text-teal-700 dark:text-teal-400" />
+                    <span>Ready-to-Use Industry Template</span>
+                  </label>
+                  <span className="text-[11px] text-slate-500">Pre-configures POS, zones, categories &amp; hardware</span>
+                </div>
+                <div className="mt-2 grid max-h-56 grid-cols-1 gap-2 overflow-y-auto pr-1 sm:grid-cols-2">
+                  {BUSINESS_INDUSTRY_TEMPLATES.map((tpl) => {
+                    const active = templateId === tpl.id;
+                    return (
+                      <button
+                        key={tpl.id}
+                        type="button"
+                        onClick={() => {
+                          setTemplateId(tpl.id);
+                          setSetupMode(tpl.id === 'custom' ? 'clean' : 'starter');
+                        }}
+                        className={`rounded-lg border p-2.5 text-left transition-colors ${
+                          active
+                            ? 'border-teal-600 bg-teal-50/70 dark:border-teal-500 dark:bg-teal-950/50'
+                            : 'border-slate-200 bg-white hover:bg-slate-50 dark:border-slate-700 dark:bg-slate-900'
+                        }`}
+                      >
+                        <div className="flex items-center justify-between gap-2">
+                          <span className="text-xs font-bold text-slate-900 dark:text-slate-100">
+                            {tpl.name}
+                          </span>
+                          <span className="font-mono text-[10px] font-semibold text-teal-700 dark:text-teal-400">
+                            {tpl.installedModuleIds.length} apps
+                          </span>
+                        </div>
+                        <p className="mt-0.5 line-clamp-2 text-[10px] text-slate-500 dark:text-slate-400">
+                          {tpl.tagline}
+                        </p>
+                        <p className="mt-1 font-mono text-[10px] text-slate-600 dark:text-slate-300">
+                          {tpl.starterProducts.length > 0
+                            ? `${tpl.starterProducts.length} starter SKUs · ${tpl.layoutConfig.zones.length} zones`
+                            : 'Zero fake data · Configure from scratch'}
+                        </p>
+                      </button>
+                    );
+                  })}
+                </div>
               </div>
-              <div>
-                <label className="block text-xs font-medium text-slate-700 dark:text-slate-300">
-                  Physical Location / Town
-                </label>
-                <input
-                  type="text"
-                  value={branchLocation}
-                  onChange={(e) => setBranchLocation(e.target.value)}
-                  className="mt-1 w-full rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-900 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-100"
-                />
+
+              <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                <div>
+                  <label className="block text-xs font-medium text-slate-700 dark:text-slate-300">
+                    First Store / Branch Name
+                  </label>
+                  <input
+                    type="text"
+                    value={branchName}
+                    onChange={(e) => setBranchName(e.target.value)}
+                    className="mt-1 w-full rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-900 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-100"
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs font-medium text-slate-700 dark:text-slate-300">
+                    Physical Location / Town
+                  </label>
+                  <input
+                    type="text"
+                    value={branchLocation}
+                    onChange={(e) => setBranchLocation(e.target.value)}
+                    className="mt-1 w-full rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-900 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-100"
+                  />
+                </div>
               </div>
             </div>
           )}
@@ -574,34 +628,14 @@ export const OnboardingWizardModal: React.FC<OnboardingWizardModalProps> = ({
               </div>
 
               <div className="space-y-2 rounded-lg border border-slate-200 bg-slate-50 p-3 dark:border-slate-800 dark:bg-slate-800/40">
-                <p className="text-xs font-semibold text-slate-800 dark:text-slate-200">
-                  Workspace Data Mode &amp; Online Storefront
-                </p>
-                <div className="grid grid-cols-2 gap-2">
-                  <button
-                    type="button"
-                    onClick={() => setSetupMode('clean')}
-                    className={`rounded-lg border p-2 text-left text-[11px] ${
-                      setupMode === 'clean'
-                        ? 'border-teal-600 bg-white text-slate-900 dark:bg-slate-900 dark:text-slate-100'
-                        : 'border-slate-200 text-slate-500 dark:border-slate-700'
-                    }`}
-                  >
-                    <p className="font-bold">Clean Real Workspace</p>
-                    <p className="mt-0.5 text-[10px]">Zero fake products, zero dummy staff, configure your own gateways.</p>
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => setSetupMode('starter')}
-                    className={`rounded-lg border p-2 text-left text-[11px] ${
-                      setupMode === 'starter'
-                        ? 'border-teal-600 bg-white text-slate-900 dark:bg-slate-900 dark:text-slate-100'
-                        : 'border-slate-200 text-slate-500 dark:border-slate-700'
-                    }`}
-                  >
-                    <p className="font-bold">Starter Sample Template</p>
-                    <p className="mt-0.5 text-[10px]">Includes sample SKU, shelf zones, and active payment defaults.</p>
-                  </button>
+                <div className="flex items-center justify-between text-xs">
+                  <span className="font-semibold text-slate-800 dark:text-slate-200">
+                    Selected Blueprint: {selectedTemplate.name}
+                  </span>
+                  <span className="font-mono text-[11px] text-teal-700 dark:text-teal-400">
+                    {selectedTemplate.installedModuleIds.length} modules ·{' '}
+                    {setupMode === 'clean' ? 'Zero Seed Data' : `${selectedTemplate.starterProducts.length} Starter SKUs`}
+                  </span>
                 </div>
                 <label className="inline-flex items-center gap-2 pt-1 text-xs text-slate-700 dark:text-slate-300">
                   <input
@@ -630,6 +664,7 @@ export const OnboardingWizardModal: React.FC<OnboardingWizardModalProps> = ({
                     https://misafarms.com/{effectiveSlug}
                   </strong>
                 </div>
+                <div>Template: <strong>{selectedTemplate.name}</strong></div>
                 <div>Localization: <strong>{country} · {currency} (VAT {vatRate}%)</strong></div>
                 <div>Branch: <strong>{branchName}</strong></div>
                 <div>Fiscal Mode: <strong>{etimsMode} ({taxPin})</strong></div>
@@ -639,7 +674,6 @@ export const OnboardingWizardModal: React.FC<OnboardingWizardModalProps> = ({
                     {selectedPlanObj.name} ({selectedPlanObj.monthlyPriceKes === 0 ? '14d Free' : `KES ${selectedPlanObj.monthlyPriceKes.toLocaleString()}/mo`})
                   </strong>
                 </div>
-                <div>Workspace Mode: <strong>{setupMode === 'clean' ? 'Clean (No Fake Data)' : 'Starter Sample'}</strong></div>
                 <div>eCommerce: <strong>{ecommerceEnabled ? 'Enabled' : 'Disabled'}</strong></div>
               </div>
             </div>
