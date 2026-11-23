@@ -295,6 +295,7 @@ export const DEFAULT_LAYOUT_CONFIG: BusinessLayoutConfig = {
   slotLabel: 'Table / Shelf',
   autoMarkTableNeedsClearing: true,
   showShelfOnPosTile: true,
+  showSectionsOnPos: true,
   zones: [
     {
       id: 'zone-floor-main',
@@ -558,6 +559,7 @@ export const SEED_BUSINESSES: BusinessEntity[] = [
       slotLabel: 'Bay / Shelf',
       autoMarkTableNeedsClearing: false,
       showShelfOnPosTile: true,
+      showSectionsOnPos: false,
       zones: [
         {
           id: 'zone-rv-1',

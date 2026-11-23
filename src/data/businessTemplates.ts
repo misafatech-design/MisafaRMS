@@ -188,6 +188,7 @@ export const BUSINESS_INDUSTRY_TEMPLATES: BusinessIndustryTemplate[] = [
       slotLabel: 'Shelf / Cold Bay',
       autoMarkTableNeedsClearing: false,
       showShelfOnPosTile: true,
+      showSectionsOnPos: false,
       zones: [
         {
           id: 'zone-sm-aisle1',
@@ -279,6 +280,7 @@ export const BUSINESS_INDUSTRY_TEMPLATES: BusinessIndustryTemplate[] = [
       slotLabel: 'Table',
       autoMarkTableNeedsClearing: true,
       showShelfOnPosTile: false,
+      showSectionsOnPos: false,
       zones: [
         {
           id: 'zone-rst-main',
@@ -367,6 +369,7 @@ export const BUSINESS_INDUSTRY_TEMPLATES: BusinessIndustryTemplate[] = [
       slotLabel: 'Bin / Shelf',
       autoMarkTableNeedsClearing: false,
       showShelfOnPosTile: true,
+      showSectionsOnPos: false,
       zones: [
         {
           id: 'zone-ph-disp',
@@ -444,6 +447,7 @@ export const BUSINESS_INDUSTRY_TEMPLATES: BusinessIndustryTemplate[] = [
       slotLabel: 'Display Rack',
       autoMarkTableNeedsClearing: false,
       showShelfOnPosTile: true,
+      showSectionsOnPos: false,
       zones: [
         {
           id: 'zone-fsh-1',
@@ -531,6 +535,7 @@ export const BUSINESS_INDUSTRY_TEMPLATES: BusinessIndustryTemplate[] = [
       slotLabel: 'Cabinet / Pegboard',
       autoMarkTableNeedsClearing: false,
       showShelfOnPosTile: true,
+      showSectionsOnPos: false,
       zones: [
         {
           id: 'zone-elc-1',
@@ -605,6 +610,7 @@ export const BUSINESS_INDUSTRY_TEMPLATES: BusinessIndustryTemplate[] = [
       slotLabel: 'Chair / Room',
       autoMarkTableNeedsClearing: true,
       showShelfOnPosTile: true,
+      showSectionsOnPos: false,
       zones: [
         {
           id: 'zone-sal-1',
@@ -679,6 +685,7 @@ export const BUSINESS_INDUSTRY_TEMPLATES: BusinessIndustryTemplate[] = [
       slotLabel: 'Pallet Bay',
       autoMarkTableNeedsClearing: false,
       showShelfOnPosTile: true,
+      showSectionsOnPos: false,
       zones: [
         {
           id: 'zone-wh-1',
@@ -744,6 +751,7 @@ export const BUSINESS_INDUSTRY_TEMPLATES: BusinessIndustryTemplate[] = [
       slotLabel: 'Shelf / Rack',
       autoMarkTableNeedsClearing: false,
       showShelfOnPosTile: true,
+      showSectionsOnPos: false,
       zones: [],
     },
     catalogTaxonomy: [],

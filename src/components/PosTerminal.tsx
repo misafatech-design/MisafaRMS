@@ -6,6 +6,7 @@ import {
   CheckCircle2,
   CloudOff,
   CreditCard,
+  Database,
   Delete,
   HeartHandshake,
   KeyRound,
@@ -20,6 +21,8 @@ import {
   Plus,
   Printer,
   QrCode,
+  RefreshCw,
+  RotateCcw,
   Scale,
   Send,
   Settings,
@@ -49,6 +52,14 @@ import {
 import { formatMoney, getTaxLabel, ROLE_PERMISSIONS } from '../utils/cryptoSync';
 import { PWAInstallButton } from './PWAInstallButton';
 import { DEFAULT_POS_HARDWARE_CONFIG } from '../data/businessTemplates';
+import {
+  OfflineQueueItem,
+  PersistedPosDraft,
+  loadPosRegisterDraft,
+  loadPosRegisterDraftSync,
+  requestPersistentBrowserStorage,
+  savePosRegisterDraft,
+} from '../utils/offlineStorage';
 import {
   buildCashDrawerKickBytes,
   buildEscPosReceiptBytes,
@@ -84,6 +95,10 @@ interface PosTerminalProps {
   ) => Promise<void>;
   activeRole: UserRole;
   isOffline: boolean;
+  offlineQueueItems?: OfflineQueueItem[];
+  isSyncingOffline?: boolean;
+  onSyncOfflineQueue?: () => Promise<void>;
+  onToggleOfflineMode?: (offline: boolean) => void;
   canExitToAdmin: boolean;
   onExitToAdmin?: () => void;
   onOpenModuleById?: (moduleId: string) => void;
@@ -159,6 +174,10 @@ export const PosTerminal: React.FC<PosTerminalProps> = ({
   onSlotStatusChange,
   activeRole,
   isOffline,
+  offlineQueueItems = [],
+  isSyncingOffline = false,
+  onSyncOfflineQueue,
+  onToggleOfflineMode,
   canExitToAdmin,
   onExitToAdmin,
   onOpenModuleById,
@@ -174,6 +193,8 @@ export const PosTerminal: React.FC<PosTerminalProps> = ({
   const [category, setCategory] = useState('All');
   const [subCategory, setSubCategory] = useState('All');
   const [hwBanner, setHwBanner] = useState<string>('');
+  const [recoveryBanner, setRecoveryBanner] = useState<string>('');
+  const [showOfflineQueueModal, setShowOfflineQueueModal] = useState(false);
   const [pdqState, setPdqState] = useState<'idle' | 'charging' | 'approved'>('idle');
   const [pdqAuthRef, setPdqAuthRef] = useState('');
   const [pdqDetail, setPdqDetail] = useState('');
@@ -186,8 +207,17 @@ export const PosTerminal: React.FC<PosTerminalProps> = ({
   const floorZones = useMemo(() => zones.filter((z) => z.kind === 'floor'), [zones]);
   const sectionZones = useMemo(() => zones.filter((z) => z.kind === 'section'), [zones]);
 
+  const isRestaurantMode =
+    layoutConfig?.layoutMode === 'restaurant_tables' ||
+    layoutConfig?.layoutMode === 'hybrid' ||
+    business.installedModuleIds.includes('restaurant');
+  const canShowTables = isRestaurantMode && floorZones.length > 0;
+  const canShowSections =
+    sectionZones.length > 0 && Boolean(layoutConfig?.showSectionsOnPos);
+  const showSpatialPanel = canShowTables || canShowSections;
+
   const [spatialView, setSpatialView] = useState<'tables' | 'shelves'>(
-    layoutConfig?.layoutMode === 'restaurant_tables' ? 'tables' : 'shelves'
+    canShowTables ? 'tables' : 'shelves'
   );
   const [activeFloorId, setActiveFloorId] = useState<string>(floorZones[0]?.id || '');
   const [activeSectionId, setActiveSectionId] = useState<string>('All');
@@ -243,20 +273,193 @@ export const PosTerminal: React.FC<PosTerminalProps> = ({
   const [pinError, setPinError] = useState('');
   const [clockFeedback, setClockFeedback] = useState('');
 
-  // Reset register context when switching businesses or branches
+  // Keep spatialView in bounds whenever restaurant / showSectionsOnPos settings change
   useEffect(() => {
-    setCart([]);
-    setSelectedOfferId('');
-    setTipInput('0');
-    setSelectedTableSlot(null);
+    if (canShowTables && !canShowSections) {
+      setSpatialView('tables');
+    } else if (!canShowTables && canShowSections) {
+      setSpatialView('shelves');
+    }
+  }, [canShowTables, canShowSections]);
+
+  // Refs for crash/power-outage persistent draft hydration & flushing
+  const draftHydratedKeyRef = useRef<string>('');
+  const latestProductsRef = useRef(products);
+  latestProductsRef.current = products;
+  const latestEmployeesRef = useRef(employees);
+  latestEmployeesRef.current = employees;
+  const latestUnlockRef = useRef(onUnlockByPin);
+  latestUnlockRef.current = onUnlockByPin;
+
+  // Hydrate persistent register draft on business/store switch (survives reloads & power outages)
+  useEffect(() => {
+    let cancelled = false;
+    const targetKey = `${business.id}::${store.id}`;
+    draftHydratedKeyRef.current = '';
+
     setCompletedReceipt(null);
     setErrorMsg('');
     setCategory('All');
     setSubCategory('All');
     setActiveSectionId('All');
-    setSpatialView(layoutConfig?.layoutMode === 'restaurant_tables' ? 'tables' : 'shelves');
-    setActiveFloorId(floorZones[0]?.id || '');
-  }, [business.id, store.id, layoutConfig?.layoutMode, floorZones]);
+    setActiveFloorId((prev) => prev || floorZones[0]?.id || '');
+
+    const applyDraft = (draft: PersistedPosDraft | null) => {
+      if (cancelled) return;
+      if (draft) {
+        const liveProducts = latestProductsRef.current;
+        const reconcileLines = (lines: CartLine[]): CartLine[] =>
+          lines.map((line) => {
+            const fresh = liveProducts.find((p) => p.id === line.product.id);
+            return fresh ? { ...line, product: fresh } : line;
+          });
+
+        const nextCart = reconcileLines(draft.cart || []);
+        const nextHeld = (draft.heldCarts || []).map((h) => ({
+          ...h,
+          lines: reconcileLines(h.lines || []),
+        }));
+
+        setCart(nextCart);
+        setHeldCarts(nextHeld);
+        setCustomerName(draft.customerName || 'Walk-in Customer');
+        setCustomerPin(draft.customerPin || '');
+        setCustomerPhone(draft.customerPhone || '254712345678');
+        setCustomerEmail(draft.customerEmail || '');
+        setSelectedOfferId(draft.selectedOfferId || '');
+        setTipInput(draft.tipInput || '0');
+        setSelectedTableSlot(draft.selectedTableSlot || null);
+        if (draft.paymentMethod) setPaymentMethod(draft.paymentMethod);
+        setTenderedInput(draft.tenderedInput || '');
+
+        let recoveredStaffName = '';
+        if (draft.activeEmployeeId) {
+          const matchedEmp = latestEmployeesRef.current.find(
+            (e) => e.id === draft.activeEmployeeId && e.active
+          );
+          if (matchedEmp) {
+            latestUnlockRef.current(matchedEmp.pinCode);
+            setIsLocked(false);
+            recoveredStaffName = matchedEmp.name;
+          }
+        }
+
+        const hasOpenWork =
+          nextCart.length > 0 ||
+          nextHeld.length > 0 ||
+          Boolean(draft.selectedTableSlot) ||
+          Boolean(recoveredStaffName);
+        if (hasOpenWork) {
+          const timeLabel = new Date(draft.updatedAt).toLocaleTimeString([], {
+            hour: '2-digit',
+            minute: '2-digit',
+          });
+          setRecoveryBanner(
+            `Recovered POS session (${nextCart.reduce((s, c) => s + c.qty, 0)} cart item(s), ${nextHeld.length} held bill(s)${
+              recoveredStaffName ? `, staff ${recoveredStaffName}` : ''
+            }) saved at ${timeLabel}.`
+          );
+        } else {
+          setRecoveryBanner('');
+        }
+      } else {
+        setCart([]);
+        setHeldCarts([]);
+        setSelectedOfferId('');
+        setTipInput('0');
+        setSelectedTableSlot(null);
+        setCustomerName('Walk-in Customer');
+        setCustomerPin('');
+        setCustomerEmail('');
+        setTenderedInput('');
+        setRecoveryBanner('');
+      }
+      draftHydratedKeyRef.current = targetKey;
+    };
+
+    void requestPersistentBrowserStorage();
+    const syncDraft = loadPosRegisterDraftSync(business.id, store.id);
+    if (syncDraft) {
+      applyDraft(syncDraft);
+    } else {
+      void loadPosRegisterDraft(business.id, store.id).then((idbDraft) => {
+        if (!cancelled) applyDraft(idbDraft);
+      });
+    }
+
+    return () => {
+      cancelled = true;
+    };
+  }, [business.id, store.id]);
+
+  // Build snapshot object for immediate & power-outage unload persistence
+  const currentDraftSnapshot: PersistedPosDraft = useMemo(
+    () => ({
+      businessId: business.id,
+      storeId: store.id,
+      cart,
+      heldCarts,
+      customerName,
+      customerPin,
+      customerPhone,
+      customerEmail,
+      selectedOfferId,
+      tipInput,
+      selectedTableSlot,
+      paymentMethod,
+      tenderedInput,
+      activeEmployeeId: isLocked ? null : activeEmployee?.id || null,
+      updatedAt: new Date().toISOString(),
+    }),
+    [
+      business.id,
+      store.id,
+      cart,
+      heldCarts,
+      customerName,
+      customerPin,
+      customerPhone,
+      customerEmail,
+      selectedOfferId,
+      tipInput,
+      selectedTableSlot,
+      paymentMethod,
+      tenderedInput,
+      isLocked,
+      activeEmployee?.id,
+    ]
+  );
+
+  const latestDraftRef = useRef<PersistedPosDraft>(currentDraftSnapshot);
+  latestDraftRef.current = currentDraftSnapshot;
+
+  useEffect(() => {
+    const expectedKey = `${business.id}::${store.id}`;
+    if (draftHydratedKeyRef.current !== expectedKey) return;
+    void savePosRegisterDraft(currentDraftSnapshot);
+  }, [business.id, store.id, currentDraftSnapshot]);
+
+  useEffect(() => {
+    const flushNow = () => {
+      const expectedKey = `${business.id}::${store.id}`;
+      if (draftHydratedKeyRef.current !== expectedKey) return;
+      void savePosRegisterDraft({
+        ...latestDraftRef.current,
+        updatedAt: new Date().toISOString(),
+      });
+    };
+    const onVisChange = () => {
+      if (document.visibilityState === 'hidden') flushNow();
+    };
+    window.addEventListener('beforeunload', flushNow);
+    window.addEventListener('pagehide', flushNow);
+    document.addEventListener('visibilitychange', onVisChange);
+    return () => {
+      window.removeEventListener('beforeunload', flushNow);
+      window.removeEventListener('pagehide', flushNow);
+      document.removeEventListener('visibilitychange', onVisChange);
+    };
+  }, [business.id, store.id]);
 
   // Keep paymentMethod strictly synced with enabledGateways
   useEffect(() => {
@@ -384,6 +587,7 @@ export const PosTerminal: React.FC<PosTerminalProps> = ({
       const catOk = category === 'All' || p.category === category;
       const subOk = subCategory === 'All' || p.subCategory === subCategory;
       const secOk =
+        !canShowSections ||
         spatialView !== 'shelves' ||
         activeSectionId === 'All' ||
         p.zoneId === activeSectionId;
@@ -395,7 +599,7 @@ export const PosTerminal: React.FC<PosTerminalProps> = ({
         (p.shelfCode && p.shelfCode.toLowerCase().includes(q));
       return catOk && subOk && secOk && qOk;
     });
-  }, [products, category, subCategory, spatialView, activeSectionId, search]);
+  }, [products, category, subCategory, canShowSections, spatialView, activeSectionId, search]);
 
   const addProductToCart = (product: ProductItem) => {
     const avail = product.stockByStore[store.id] ?? 0;
@@ -744,6 +948,131 @@ export const PosTerminal: React.FC<PosTerminalProps> = ({
   const currentFloor =
     floorZones.find((z) => z.id === activeFloorId) || floorZones[0] || null;
 
+  const businessQueueItems = useMemo(
+    () =>
+      offlineQueueItems.filter(
+        (item) => !item.businessId || item.businessId === business.id
+      ),
+    [offlineQueueItems, business.id]
+  );
+
+  const renderOfflineQueueModal = () => {
+    if (!showOfflineQueueModal) return null;
+    return (
+      <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/60 p-4 backdrop-blur-xs">
+        <div className="w-full max-w-lg rounded-xl border border-slate-200 bg-white p-5 shadow-xl dark:border-slate-800 dark:bg-slate-900">
+          <div className="flex items-start justify-between gap-3 border-b border-slate-200 pb-3 dark:border-slate-800">
+            <div>
+              <div className="flex items-center gap-2">
+                <Database className="h-4 w-4 text-teal-700 dark:text-teal-400" />
+                <h3 className="font-display text-base font-bold text-slate-900 dark:text-slate-100">
+                  Offline Browser Vault &amp; Sync Queue
+                </h3>
+              </div>
+              <p className="mt-0.5 text-xs text-slate-500 dark:text-slate-400">
+                Encrypted AES-256 receipts stored locally in IndexedDB + LocalStorage survive power outages and offline shifts.
+              </p>
+            </div>
+            <button
+              type="button"
+              onClick={() => setShowOfflineQueueModal(false)}
+              className="rounded p-1 text-slate-400 hover:bg-slate-100 hover:text-slate-700 dark:hover:bg-slate-800"
+            >
+              <X className="h-4 w-4" />
+            </button>
+          </div>
+
+          <div className="mt-3 flex flex-wrap items-center justify-between gap-2 rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-xs dark:border-slate-800 dark:bg-slate-800/60">
+            <span className="inline-flex items-center gap-1.5 font-medium text-slate-700 dark:text-slate-200">
+              {isOffline ? (
+                <>
+                  <CloudOff className="h-3.5 w-3.5 text-amber-600" />
+                  <span>Offline Mode Active</span>
+                </>
+              ) : (
+                <>
+                  <Wifi className="h-3.5 w-3.5 text-emerald-600 dark:text-emerald-400" />
+                  <span>Connected to MisafaRMS Cloud</span>
+                </>
+              )}
+            </span>
+            {onToggleOfflineMode && (
+              <button
+                type="button"
+                onClick={() => onToggleOfflineMode(!isOffline)}
+                className="rounded-md border border-slate-200 bg-white px-2.5 py-1 text-[11px] font-semibold text-slate-700 hover:bg-slate-100 whitespace-nowrap shrink-0 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200"
+              >
+                {isOffline ? 'Switch Online' : 'Test Offline Mode'}
+              </button>
+            )}
+          </div>
+
+          <div className="mt-3 max-h-64 space-y-2 overflow-y-auto">
+            {businessQueueItems.length === 0 ? (
+              <div className="rounded-lg border border-dashed border-slate-200 py-8 text-center text-xs text-slate-500 dark:border-slate-800 dark:text-slate-400">
+                All local receipts are synced with the server and KRA eTIMS.
+              </div>
+            ) : (
+              businessQueueItems.map((item) => (
+                <div
+                  key={item.id}
+                  className="flex items-center justify-between gap-3 rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs dark:border-slate-800 dark:bg-slate-950/60"
+                >
+                  <div className="min-w-0">
+                    <p className="font-mono font-semibold text-slate-900 dark:text-slate-100">
+                      #{item.receiptNo}
+                    </p>
+                    <p className="truncate text-[11px] text-slate-500 dark:text-slate-400">
+                      {item.customerName} · {item.paymentMethod} · {item.cashierName}
+                    </p>
+                  </div>
+                  <div className="text-right shrink-0">
+                    <p className="font-mono font-semibold tabular-nums text-teal-700 dark:text-teal-400">
+                      {formatMoney(item.total, item.currency)}
+                    </p>
+                    <p className="font-mono text-[10px] text-slate-400">
+                      {new Date(item.createdAt).toLocaleTimeString([], {
+                        hour: '2-digit',
+                        minute: '2-digit',
+                      })}
+                    </p>
+                  </div>
+                </div>
+              ))
+            )}
+          </div>
+
+          <div className="mt-4 flex items-center justify-end gap-2 border-t border-slate-200 pt-3 dark:border-slate-800">
+            <button
+              type="button"
+              onClick={() => setShowOfflineQueueModal(false)}
+              className="rounded-lg border border-slate-200 px-3 py-2 text-xs font-semibold text-slate-700 hover:bg-slate-50 dark:border-slate-700 dark:text-slate-200"
+            >
+              Close
+            </button>
+            <button
+              type="button"
+              disabled={isOffline || isSyncingOffline || offlineQueueItems.length === 0 || !onSyncOfflineQueue}
+              onClick={async () => {
+                if (onSyncOfflineQueue) {
+                  await onSyncOfflineQueue();
+                }
+              }}
+              className="inline-flex items-center gap-1.5 rounded-lg bg-teal-700 px-3.5 py-2 text-xs font-semibold text-white hover:bg-teal-800 disabled:opacity-50 whitespace-nowrap shrink-0 dark:bg-teal-600"
+            >
+              <RefreshCw className={`h-3.5 w-3.5 ${isSyncingOffline ? 'animate-spin' : ''}`} />
+              <span>
+                {isSyncingOffline
+                  ? 'Syncing Vault...'
+                  : `Sync All (${offlineQueueItems.length}) to Server & eTIMS`}
+              </span>
+            </button>
+          </div>
+        </div>
+      </div>
+    );
+  };
+
   // Dedicated Full-Screen Employee PIN Login & Shift Attendance Screen
   if (isLocked) {
     return (
@@ -759,6 +1088,30 @@ export const PosTerminal: React.FC<PosTerminalProps> = ({
             <p className="mt-0.5 font-mono text-xs text-slate-500 dark:text-slate-400">
               {store.name} · Register {store.registerId}
             </p>
+            <div className="mt-2 flex flex-wrap items-center justify-center gap-2">
+              <button
+                type="button"
+                onClick={() => onToggleOfflineMode?.(!isOffline)}
+                className={`inline-flex items-center gap-1 rounded-md border px-2 py-0.5 text-[11px] font-medium ${
+                  isOffline
+                    ? 'border-amber-300 bg-amber-50 text-amber-800 dark:border-amber-800 dark:bg-amber-950/50 dark:text-amber-300'
+                    : 'border-slate-200 bg-slate-50 text-slate-600 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-300'
+                }`}
+              >
+                {isOffline ? <CloudOff className="h-3 w-3" /> : <Wifi className="h-3 w-3 text-emerald-600" />}
+                <span>{isOffline ? 'Offline Register' : 'Online'}</span>
+              </button>
+              {offlineQueueItems.length > 0 && (
+                <button
+                  type="button"
+                  onClick={() => setShowOfflineQueueModal(true)}
+                  className="inline-flex items-center gap-1 rounded-md border border-amber-300 bg-amber-50 px-2 py-0.5 font-mono text-[11px] font-semibold text-amber-800 hover:bg-amber-100 dark:border-amber-800 dark:bg-amber-950/50 dark:text-amber-300"
+                >
+                  <Database className="h-3 w-3" />
+                  <span>Vault: {offlineQueueItems.length}</span>
+                </button>
+              )}
+            </div>
             <p className="mt-2 text-xs font-medium text-slate-600 dark:text-slate-300">
               Enter your 4-digit Employee PIN to clock in &amp; open POS
             </p>
@@ -884,6 +1237,7 @@ export const PosTerminal: React.FC<PosTerminalProps> = ({
             </div>
           )}
         </div>
+        {renderOfflineQueueModal()}
       </div>
     );
   }
@@ -935,11 +1289,20 @@ export const PosTerminal: React.FC<PosTerminalProps> = ({
               </button>
             ))}
 
-            <span className="inline-flex items-center gap-1.5 px-2 py-1 text-xs font-medium text-slate-600 dark:text-slate-300">
+            <button
+              type="button"
+              onClick={() => onToggleOfflineMode?.(!isOffline)}
+              title="Toggle offline queue mode (continues working if internet or power drops)"
+              className={`inline-flex items-center gap-1.5 rounded-lg border px-2.5 py-1.5 text-xs font-medium whitespace-nowrap shrink-0 ${
+                isOffline
+                  ? 'border-amber-300 bg-amber-50 text-amber-800 hover:bg-amber-100 dark:border-amber-800 dark:bg-amber-950/60 dark:text-amber-300'
+                  : 'border-slate-200 bg-white text-slate-700 hover:bg-slate-50 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-200'
+              }`}
+            >
               {isOffline ? (
                 <>
                   <CloudOff className="h-3.5 w-3.5 text-amber-600" />
-                  <span>Offline Queue</span>
+                  <span>Offline Mode</span>
                 </>
               ) : (
                 <>
@@ -947,7 +1310,18 @@ export const PosTerminal: React.FC<PosTerminalProps> = ({
                   <span>Connected</span>
                 </>
               )}
-            </span>
+            </button>
+
+            {offlineQueueItems.length > 0 && (
+              <button
+                type="button"
+                onClick={() => setShowOfflineQueueModal(true)}
+                className="inline-flex items-center gap-1.5 rounded-lg border border-amber-300 bg-amber-50 px-2.5 py-1.5 font-mono text-xs font-semibold text-amber-800 hover:bg-amber-100 whitespace-nowrap shrink-0 tabular-nums dark:border-amber-700 dark:bg-amber-950/60 dark:text-amber-300"
+              >
+                <Database className="h-3.5 w-3.5" />
+                <span>Sync Queue ({offlineQueueItems.length})</span>
+              </button>
+            )}
 
             <PWAInstallButton compact />
 
@@ -1047,6 +1421,21 @@ export const PosTerminal: React.FC<PosTerminalProps> = ({
             {hwBanner}
           </div>
         )}
+        {recoveryBanner && (
+          <div className="mx-auto mt-2 flex max-w-[1440px] items-center justify-between gap-2 rounded-lg border border-sky-200 bg-sky-50 px-3 py-1.5 text-xs font-medium text-sky-900 dark:border-sky-900 dark:bg-sky-950/50 dark:text-sky-300">
+            <span className="inline-flex items-center gap-1.5">
+              <RotateCcw className="h-3.5 w-3.5 shrink-0" />
+              <span>{recoveryBanner}</span>
+            </span>
+            <button
+              type="button"
+              onClick={() => setRecoveryBanner('')}
+              className="rounded px-2 py-0.5 text-[11px] font-semibold hover:bg-sky-100 dark:hover:bg-sky-900"
+            >
+              Dismiss
+            </button>
+          </div>
+        )}
       </div>
 
       {/* POS Setup Gate: Block unconfigured checkouts */}
@@ -1106,24 +1495,24 @@ export const PosTerminal: React.FC<PosTerminalProps> = ({
       <div className="mx-auto grid max-w-[1440px] grid-cols-1 gap-5 px-4 py-5 sm:px-6 lg:grid-cols-12">
         {/* Left: Spatial Layout + 2-Tier Taxonomy + Product Grid */}
         <div className="space-y-4 lg:col-span-7">
-          {/* Spatial Layout Panel: Floors/Tables (Restaurant) & Sections/Shelves (Retail) */}
-          {zones.length > 0 && (
+          {/* Spatial Layout Panel: Only shown when Restaurant Floors/Tables apply OR Store Sections & Shelves is explicitly enabled */}
+          {showSpatialPanel && (
             <section className="rounded-xl border border-slate-200 bg-white p-3.5 dark:border-slate-800 dark:bg-slate-900">
               <div className="flex flex-wrap items-center justify-between gap-2">
                 <div className="flex items-center gap-2 text-xs font-semibold text-slate-900 dark:text-slate-100">
-                  {spatialView === 'tables' ? (
+                  {spatialView === 'tables' && canShowTables ? (
                     <UtensilsCrossed className="h-3.5 w-3.5 text-teal-700 dark:text-teal-400" />
                   ) : (
                     <Layers className="h-3.5 w-3.5 text-teal-700 dark:text-teal-400" />
                   )}
                   <span>
-                    {spatialView === 'tables'
+                    {spatialView === 'tables' && canShowTables
                       ? 'Floors & Tables (Assign Order / Clear Table)'
                       : 'Store Sections & Shelves (Find & Restock)'}
                   </span>
                 </div>
 
-                {layoutConfig?.layoutMode === 'hybrid' && (
+                {canShowTables && canShowSections && (
                   <div className="flex items-center gap-1 rounded-lg bg-slate-100 p-0.5 text-[11px] dark:bg-slate-800">
                     <button
                       type="button"
@@ -1151,7 +1540,7 @@ export const PosTerminal: React.FC<PosTerminalProps> = ({
                 )}
               </div>
 
-              {spatialView === 'tables' && floorZones.length > 0 ? (
+              {spatialView === 'tables' && canShowTables ? (
                 <div className="mt-2.5 space-y-2.5">
                   <div className="flex flex-wrap gap-1.5">
                     {floorZones.map((fz) => (
@@ -2120,6 +2509,7 @@ export const PosTerminal: React.FC<PosTerminalProps> = ({
           </div>
         </div>
       )}
+      {renderOfflineQueueModal()}
     </div>
   );
 };

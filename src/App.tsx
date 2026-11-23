@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { User } from 'firebase/auth';
 import { X } from 'lucide-react';
 import { AccountingWorkspace } from './components/AccountingWorkspace';
@@ -103,8 +103,15 @@ import {
 import { decryptOfflinePayload, encryptOfflinePayload } from './utils/cryptoSync';
 import { getDefaultModulesForRole } from './data/businessTemplates';
 import { EmvCardChargeResult } from './utils/posHardware';
+import {
+  OfflineQueueItem,
+  loadOfflineQueueItems,
+  loadWorkspaceSnapshot,
+  requestPersistentBrowserStorage,
+  saveOfflineQueueItems,
+  saveWorkspaceSnapshot,
+} from './utils/offlineStorage';
 
-const OFFLINE_QUEUE_STORAGE = 'misafarms_encrypted_offline_queue_v1';
 const POS_BINDING_STORAGE = 'misafarms_pos_binding_v1';
 
 const NON_BUSINESS_PATH_PREFIXES = new Set([
@@ -299,8 +306,9 @@ function MisafaWorkspaceApp() {
   const [isOffline, setIsOffline] = useState<boolean>(
     typeof navigator !== 'undefined' ? !navigator.onLine : false
   );
-  const [encryptedOfflineQueue, setEncryptedOfflineQueue] = useState<string[]>([]);
+  const [encryptedOfflineQueue, setEncryptedOfflineQueue] = useState<OfflineQueueItem[]>([]);
   const [isSyncing, setIsSyncing] = useState(false);
+  const workspaceHydratedRef = useRef(false);
 
   const [darkMode, setDarkMode] = useState(false);
   const [wizardOpen, setWizardOpen] = useState(false);
@@ -470,12 +478,64 @@ function MisafaWorkspaceApp() {
     return () => unsub();
   }, [initialEntry.bizSlug, initialEntry.isSuperAdminPath, initialMatchedBiz.id, initialPosShortcut]);
 
-  // Load workspace from Express backend & restore encrypted offline queue
+  // Hydrate workspace from local browser vault (power-outage recovery) then Express backend
   useEffect(() => {
+    let cancelled = false;
+
+    const applyEntrySelection = (
+      bizList: BusinessEntity[],
+      storeList: StoreBranch[],
+      empList?: EmployeeRecord[]
+    ) => {
+      if (!initialEntry.bizSlug) return;
+      const matchedBiz = bizList.find(
+        (b) => b.slug.toLowerCase() === initialEntry.bizSlug!.toLowerCase()
+      );
+      if (!matchedBiz) return;
+      setActiveBusinessId(matchedBiz.id);
+      if (!initialPosShortcut) setShowLanding(false);
+      const matchedStore = storeList.find(
+        (s) =>
+          s.businessId === matchedBiz.id &&
+          (!initialEntry.storeId || s.id === initialEntry.storeId)
+      );
+      if (matchedStore) setActiveStoreId(matchedStore.id);
+      const matchedEmp = empList?.find((e) => e.businessId === matchedBiz.id);
+      setActiveEmployee(matchedEmp || null);
+      if (initialEntry.isShopPath) {
+        const ecomMod = APP_MODULES.find((m) => m.id === 'ecommerce');
+        if (ecomMod) setSelectedModule(ecomMod);
+      }
+    };
+
     const loadWorkspace = async () => {
+      void requestPersistentBrowserStorage();
+
+      // 1) Immediately hydrate persisted offline queue & cached workspace from IndexedDB / localStorage
+      const [cachedQueue, cachedSnapshot] = await Promise.all([
+        loadOfflineQueueItems(),
+        loadWorkspaceSnapshot(),
+      ]);
+      if (!cancelled) {
+        if (cachedQueue.length > 0) setEncryptedOfflineQueue(cachedQueue);
+        if (cachedSnapshot) {
+          setBusinesses(cachedSnapshot.businesses);
+          setStores(cachedSnapshot.stores);
+          setEmployees(cachedSnapshot.employees);
+          setProducts(cachedSnapshot.products);
+          setTransactions(cachedSnapshot.transactions);
+          applyEntrySelection(
+            cachedSnapshot.businesses,
+            cachedSnapshot.stores,
+            cachedSnapshot.employees
+          );
+        }
+      }
+
+      // 2) Refresh from live Express backend when reachable
       try {
         const res = await fetch('/api/workspace');
-        if (res.ok) {
+        if (res.ok && !cancelled) {
           const data = await res.json();
           setBusinesses(data.businesses);
           setStores(data.stores);
@@ -500,47 +560,36 @@ function MisafaWorkspaceApp() {
           if (Array.isArray(data.subscriptionInvoices)) {
             setSubscriptionInvoices(data.subscriptionInvoices);
           }
-
-          if (initialEntry.bizSlug) {
-            const matchedBiz = (data.businesses as BusinessEntity[]).find(
-              (b) => b.slug.toLowerCase() === initialEntry.bizSlug!.toLowerCase()
-            );
-            if (matchedBiz) {
-              setActiveBusinessId(matchedBiz.id);
-              if (!initialPosShortcut) setShowLanding(false);
-              const matchedStore = (data.stores as StoreBranch[]).find(
-                (s) =>
-                  s.businessId === matchedBiz.id &&
-                  (!initialEntry.storeId || s.id === initialEntry.storeId)
-              );
-              if (matchedStore) setActiveStoreId(matchedStore.id);
-              const matchedEmp = (data.employees as EmployeeRecord[] | undefined)?.find(
-                (e) => e.businessId === matchedBiz.id
-              );
-              setActiveEmployee(matchedEmp || null);
-              if (initialEntry.isShopPath) {
-                const ecomMod = APP_MODULES.find((m) => m.id === 'ecommerce');
-                if (ecomMod) setSelectedModule(ecomMod);
-              }
-            }
-          }
+          applyEntrySelection(data.businesses, data.stores, data.employees);
         }
       } catch {
-        // Fallback cleanly to seeded state when offline
+        // Offline boot seamlessly uses IndexedDB snapshot or seeded fallback
+      } finally {
+        if (!cancelled) workspaceHydratedRef.current = true;
       }
     };
-    loadWorkspace();
+    void loadWorkspace();
 
-    try {
-      const savedQueue = window.localStorage.getItem(OFFLINE_QUEUE_STORAGE);
-      if (savedQueue) {
-        const parsed = JSON.parse(savedQueue);
-        if (Array.isArray(parsed)) setEncryptedOfflineQueue(parsed);
-      }
-    } catch {
-      // Ignore storage parse failure
-    }
+    return () => {
+      cancelled = true;
+    };
   }, [initialEntry.bizSlug, initialEntry.isShopPath, initialEntry.storeId, initialPosShortcut]);
+
+  // Continuously persist catalog, stock, staff PINs, and transactions in IndexedDB + LocalStorage
+  useEffect(() => {
+    if (!workspaceHydratedRef.current) return;
+    const timer = window.setTimeout(() => {
+      void saveWorkspaceSnapshot({
+        businesses,
+        stores,
+        employees,
+        products,
+        transactions,
+        savedAt: new Date().toISOString(),
+      });
+    }, 200);
+    return () => window.clearTimeout(timer);
+  }, [businesses, stores, employees, products, transactions]);
 
   // Initialize in-memory bearer session on role/auth switch
   useEffect(() => {
@@ -887,8 +936,8 @@ function MisafaWorkspaceApp() {
     setIsSyncing(true);
     try {
       const decryptedItems: QueuedOfflineCheckout[] = [];
-      for (const cipher of encryptedOfflineQueue) {
-        const decoded = await decryptOfflinePayload<QueuedOfflineCheckout>(cipher);
+      for (const item of encryptedOfflineQueue) {
+        const decoded = await decryptOfflinePayload<QueuedOfflineCheckout>(item.cipher);
         if (decoded) decryptedItems.push(decoded);
       }
       if (decryptedItems.length === 0) return;
@@ -913,7 +962,7 @@ function MisafaWorkspaceApp() {
           return [...data.synced, ...remaining];
         });
         setEncryptedOfflineQueue([]);
-        window.localStorage.removeItem(OFFLINE_QUEUE_STORAGE);
+        await saveOfflineQueueItems([]);
         setSyncBanner(`Synced ${data.syncedCount} encrypted offline receipts to KRA eTIMS & cloud.`);
         setTimeout(() => setSyncBanner(''), 5000);
       }
@@ -976,11 +1025,8 @@ function MisafaWorkspaceApp() {
       createdAt: new Date().toISOString(),
     };
 
-    if (isOffline) {
+    const queueOfflineFallback = async (): Promise<SaleTransaction> => {
       const cipher = await encryptOfflinePayload(requestPayload);
-      const nextQueue = [...encryptedOfflineQueue, cipher];
-      setEncryptedOfflineQueue(nextQueue);
-      window.localStorage.setItem(OFFLINE_QUEUE_STORAGE, JSON.stringify(nextQueue));
 
       let subtotal = 0;
       let taxAmount = 0;
@@ -1010,6 +1056,23 @@ function MisafaWorkspaceApp() {
       const tipAmount = Math.max(0, Number(payload.tipAmount) || 0);
       const discountedSubtotal = Math.max(0, Math.round((subtotal - offerDiscount) * 100) / 100);
       const finalTotal = Math.round((discountedSubtotal + tipAmount) * 100) / 100;
+
+      const queueItem: OfflineQueueItem = {
+        id: requestPayload.id,
+        receiptNo: requestPayload.receiptNo,
+        businessId: activeBusiness.id,
+        storeId: activeStore.id,
+        total: finalTotal,
+        currency: activeBusiness.currency,
+        paymentMethod: payload.paymentMethod,
+        cashierName: requestPayload.cashierName,
+        customerName: payload.customerName,
+        createdAt: requestPayload.createdAt,
+        cipher,
+      };
+      const nextQueue = [...encryptedOfflineQueue, queueItem];
+      setEncryptedOfflineQueue(nextQueue);
+      await saveOfflineQueueItems(nextQueue);
 
       setProducts((prev) =>
         prev.map((p) => {
@@ -1106,16 +1169,33 @@ function MisafaWorkspaceApp() {
 
       setTransactions((prev) => [offlineTx, ...prev]);
       return offlineTx;
+    };
+
+    if (isOffline) {
+      return await queueOfflineFallback();
     }
 
-    const res = await fetch('/api/pos/checkout', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        ...(sessionToken ? { Authorization: `Bearer ${sessionToken}` } : {}),
-      },
-      body: JSON.stringify(requestPayload),
-    });
+    let res: Response;
+    try {
+      res = await fetch('/api/pos/checkout', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          ...(sessionToken ? { Authorization: `Bearer ${sessionToken}` } : {}),
+        },
+        body: JSON.stringify(requestPayload),
+      });
+    } catch {
+      setIsOffline(true);
+      setSyncBanner('Network interrupted mid-checkout — receipt encrypted safely in local browser vault.');
+      return await queueOfflineFallback();
+    }
+
+    if (res.status >= 502) {
+      setIsOffline(true);
+      setSyncBanner('Server unreachable — receipt encrypted safely in local browser vault.');
+      return await queueOfflineFallback();
+    }
 
     const data = await res.json();
     if (!res.ok) {
@@ -2515,6 +2595,10 @@ function MisafaWorkspaceApp() {
         onSlotStatusChange={handleSlotStatusChange}
         activeRole={activeRole}
         isOffline={isOffline}
+        offlineQueueItems={encryptedOfflineQueue}
+        isSyncingOffline={isSyncing}
+        onSyncOfflineQueue={handleSyncOfflineQueue}
+        onToggleOfflineMode={setIsOffline}
         canExitToAdmin={!initialPosShortcut && accountTier === 'admin' && !posKioskMode}
         onExitToAdmin={() => {
           setSelectedModule(null);

@@ -42,6 +42,7 @@ export interface BusinessLayoutConfig {
   slotLabel: string;
   autoMarkTableNeedsClearing: boolean;
   showShelfOnPosTile: boolean;
+  showSectionsOnPos?: boolean;
   zones: BusinessZone[];
 }
 

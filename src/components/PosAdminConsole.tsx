@@ -114,6 +114,7 @@ export const PosAdminConsole: React.FC<PosAdminConsoleProps> = ({
     slotLabel: 'Table / Shelf',
     autoMarkTableNeedsClearing: true,
     showShelfOnPosTile: true,
+    showSectionsOnPos: false,
     zones: [],
   };
   const [newZoneName, setNewZoneName] = useState('');
@@ -1144,6 +1145,20 @@ CASHIER WORKFLOW
                   }
                 />
                 <span>Show Shelf / Aisle location on POS product tiles</span>
+              </label>
+
+              <label className="inline-flex items-center gap-2 text-slate-700 dark:text-slate-300">
+                <input
+                  type="checkbox"
+                  checked={Boolean(layout.showSectionsOnPos)}
+                  onChange={(e) =>
+                    onUpdateLayoutConfig({
+                      ...layout,
+                      showSectionsOnPos: e.target.checked,
+                    })
+                  }
+                />
+                <span>Show Store Sections &amp; Shelves (Find &amp; Restock) panel inside POS</span>
               </label>
             </div>
           </section>
