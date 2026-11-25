@@ -5,7 +5,9 @@ import { AccountingWorkspace } from './components/AccountingWorkspace';
 import { AnalyticsDashboard } from './components/AnalyticsDashboard';
 import { AppLauncher } from './components/AppLauncher';
 import { BackupRestoreWorkspace } from './components/BackupRestoreWorkspace';
+import { BusinessSettingsWorkspace } from './components/BusinessSettingsWorkspace';
 import { CrmWorkspace } from './components/CrmWorkspace';
+import { DatabaseServiceWorkspace } from './components/DatabaseServiceWorkspace';
 import { EcommerceDomainWorkspace } from './components/EcommerceDomainWorkspace';
 import { EnterpriseGovernanceView } from './components/EnterpriseGovernanceView';
 import { ErrorBoundary } from './components/ErrorBoundary';
@@ -13,10 +15,11 @@ import { EtimsComplianceView } from './components/EtimsComplianceView';
 import { FieldAgentView } from './components/FieldAgentView';
 import { InvoicingWorkspace } from './components/InvoicingWorkspace';
 import { LandingPage } from './components/LandingPage';
+import { MarketingWorkspace } from './components/MarketingWorkspace';
 import { ModuleWorkspace } from './components/ModuleWorkspace';
 import { OnboardingWizardModal } from './components/OnboardingWizardModal';
 import { OnlineOrdersWorkspace } from './components/OnlineOrdersWorkspace';
-import { PaymentGatewaysView } from './components/PaymentGatewaysView';
+import { GatewaySecretUpdateMap, PaymentGatewaysView } from './components/PaymentGatewaysView';
 import { PosAdminConsole } from './components/PosAdminConsole';
 import { PosTerminal } from './components/PosTerminal';
 import { StudioView } from './components/StudioView';
@@ -33,9 +36,11 @@ import {
   SEED_BACKUPS,
   SEED_BUSINESSES,
   SEED_CRM_LEADS,
+  SEED_DATABASE_SERVICES,
   SEED_EMPLOYEES,
   SEED_ERP_RECORDS,
   SEED_INVOICES,
+  SEED_MARKETING_CAMPAIGNS,
   SEED_ONLINE_ORDERS,
   SEED_PAYROLL_RUNS,
   SEED_PLATFORM_USERS,
@@ -71,9 +76,13 @@ import {
   BusinessLayoutConfig,
   CategoryGroup,
   CrmCustomerLead,
+  DatabaseServiceInstance,
+  EcommerceTemplateId,
+  EcommerceUrlPrefix,
   EmployeePermissionSet,
   EmployeeRecord,
   ErpRecord,
+  MarketingCampaign,
   OnlineOrder,
   OnlineOrderFulfillmentStatus,
   PaymentGatewayConfig,
@@ -89,6 +98,7 @@ import {
   ShiftAttendanceLog,
   SlotStatus,
   StoreBranch,
+  StorefrontSeoConfig,
   StudioField,
   StudioModel,
   SubscriptionInvoice,
@@ -97,6 +107,7 @@ import {
   SubscriptionStatus,
   TaxCode,
   TaxInvoiceRecord,
+  TenantCommsConfig,
   UserRole,
   WorkflowAutomation,
 } from './types/erp';
@@ -158,8 +169,19 @@ function detectDedicatedPosEntry(): {
   if (!isPosOnly && firstSegment && !NON_BUSINESS_PATH_PREFIXES.has(firstSegment)) {
     bizSlug = firstSegment;
   }
+  const ECOMMERCE_ROUTE_PREFIXES = new Set([
+    'shop',
+    'store',
+    'market',
+    'order',
+    'menu',
+    'catalogue',
+  ]);
   const isShopPath = Boolean(
-    !isPosOnly && firstSegment && !NON_BUSINESS_PATH_PREFIXES.has(firstSegment) && secondSegment === 'shop'
+    !isPosOnly &&
+      firstSegment &&
+      !NON_BUSINESS_PATH_PREFIXES.has(firstSegment) &&
+      ECOMMERCE_ROUTE_PREFIXES.has(secondSegment)
   );
 
   if (isPosOnly && (bizSlug || storeId)) {
@@ -257,6 +279,8 @@ function MisafaWorkspaceApp() {
   const [authBanner, setAuthBanner] = useState('');
 
   const [businesses, setBusinesses] = useState<BusinessEntity[]>(SEED_BUSINESSES);
+  const [databaseServices, setDatabaseServices] =
+    useState<DatabaseServiceInstance[]>(SEED_DATABASE_SERVICES);
   const [stores, setStores] = useState<StoreBranch[]>(SEED_STORES);
   const [employees, setEmployees] = useState<EmployeeRecord[]>(SEED_EMPLOYEES);
   const [products, setProducts] = useState<ProductItem[]>(SEED_PRODUCTS);
@@ -270,6 +294,7 @@ function MisafaWorkspaceApp() {
   const [automations, setAutomations] = useState<WorkflowAutomation[]>(SEED_AUTOMATIONS);
   const [auditLogs, setAuditLogs] = useState<AuditLogEntry[]>(SEED_AUDIT_LOGS);
   const [erpRecords, setErpRecords] = useState<ErpRecord[]>(SEED_ERP_RECORDS);
+  const [campaigns, setCampaigns] = useState<MarketingCampaign[]>(SEED_MARKETING_CAMPAIGNS);
   const [attendanceLogs, setAttendanceLogs] = useState<ShiftAttendanceLog[]>(SEED_ATTENDANCE_LOGS);
   const [platformUsers, setPlatformUsers] = useState<PlatformUserRecord[]>(SEED_PLATFORM_USERS);
   const [subscriptionPlans, setSubscriptionPlans] = useState<SubscriptionPlanTier[]>(
@@ -366,6 +391,17 @@ function MisafaWorkspaceApp() {
           ) {
             setAccountTier(data.accountType);
           }
+        }
+
+        // Load all Firestore Database Services owned by this signed-in user
+        const svcQuery = query(
+          collection(db, 'databaseServices'),
+          where('ownerId', '==', user.uid)
+        );
+        const svcSnap = await getDocs(svcQuery);
+        if (!svcSnap.empty) {
+          const cloudServices = svcSnap.docs.map((d) => d.data() as DatabaseServiceInstance);
+          setDatabaseServices((prev) => mergeById(prev, cloudServices));
         }
 
         // Load all Firestore businesses owned by this signed-in user & their subcollections
@@ -538,6 +574,9 @@ function MisafaWorkspaceApp() {
         if (res.ok && !cancelled) {
           const data = await res.json();
           setBusinesses(data.businesses);
+          if (Array.isArray(data.databaseServices)) {
+            setDatabaseServices(data.databaseServices);
+          }
           setStores(data.stores);
           if (Array.isArray(data.employees)) setEmployees(data.employees);
           setProducts(data.products);
@@ -551,6 +590,7 @@ function MisafaWorkspaceApp() {
           setAutomations(data.automations);
           setAuditLogs(data.auditLogs);
           setErpRecords(data.erpRecords);
+          if (Array.isArray(data.campaigns)) setCampaigns(data.campaigns);
           if (Array.isArray(data.attendanceLogs)) setAttendanceLogs(data.attendanceLogs);
           if (Array.isArray(data.platformUsers)) setPlatformUsers(data.platformUsers);
           if (Array.isArray(data.subscriptionPlans)) setSubscriptionPlans(data.subscriptionPlans);
@@ -634,6 +674,11 @@ function MisafaWorkspaceApp() {
     [businesses, activeBusinessId]
   );
 
+  const activeService = useMemo(
+    () => databaseServices.find((s) => s.businessId === activeBusiness.id) || databaseServices[0],
+    [databaseServices, activeBusiness.id]
+  );
+
   const businessStores = useMemo(
     () => stores.filter((s) => s.businessId === activeBusiness.id),
     [stores, activeBusiness.id]
@@ -700,6 +745,11 @@ function MisafaWorkspaceApp() {
   const businessAttendanceLogs = useMemo(
     () => attendanceLogs.filter((l) => l.businessId === activeBusiness.id),
     [attendanceLogs, activeBusiness.id]
+  );
+
+  const businessCampaigns = useMemo(
+    () => campaigns.filter((c) => c.businessId === activeBusiness.id),
+    [campaigns, activeBusiness.id]
   );
 
   const handleSelectBusiness = (bizId: string) => {
@@ -855,8 +905,17 @@ function MisafaWorkspaceApp() {
             deliveryFee: biz.deliveryFee,
             freeDeliveryAbove: biz.freeDeliveryAbove,
             storefrontPickupEnabled: biz.storefrontPickupEnabled,
+            ecommercePrefix: biz.ecommercePrefix,
+            ecommerceTemplateId: biz.ecommerceTemplateId,
+            seoConfig: biz.seoConfig,
+            commsConfig: biz.commsConfig,
+            tenantSettings: biz.tenantSettings,
             installedModuleIds: biz.installedModuleIds,
             templateId: biz.templateId,
+            serviceCode: biz.serviceCode,
+            systemCategory: biz.systemCategory,
+            customSystemLabel: biz.customSystemLabel,
+            parentGroupName: biz.parentGroupName,
             supportAccess: biz.supportAccess,
             hardwareConfig: biz.hardwareConfig,
             posConfig: biz.posConfig,
@@ -871,6 +930,50 @@ function MisafaWorkspaceApp() {
         );
       } catch (err) {
         handleFirestoreError(err, OperationType.WRITE, `businesses/${biz.id}`);
+      }
+    },
+    [firebaseUser]
+  );
+
+  const syncServiceDocToCloud = useCallback(
+    async (svc: DatabaseServiceInstance) => {
+      if (!firebaseUser || !firebaseUser.emailVerified) return;
+      const svcRef = doc(db, 'databaseServices', svc.id);
+      try {
+        const existing = await getDoc(svcRef);
+        const ownerId = existing.exists()
+          ? (existing.data().ownerId as string)
+          : svc.ownerId || firebaseUser.uid;
+        if (
+          existing.exists() &&
+          ownerId !== firebaseUser.uid &&
+          firebaseUser.email !== 'misafatech@gmail.com'
+        ) {
+          return;
+        }
+        await setDoc(
+          svcRef,
+          stripUndefined({
+            id: svc.id,
+            ownerId,
+            businessId: svc.businessId,
+            serviceCode: svc.serviceCode,
+            displayName: svc.displayName,
+            slug: svc.slug,
+            systemCategory: svc.systemCategory,
+            customSystemLabel: svc.customSystemLabel,
+            parentGroupName: svc.parentGroupName,
+            templateId: svc.templateId,
+            engineStatus: svc.engineStatus,
+            region: svc.region,
+            planId: svc.planId,
+            lastConnectedAt: svc.lastConnectedAt,
+            createdAt: svc.createdAt,
+          }),
+          { merge: true }
+        );
+      } catch (err) {
+        handleFirestoreError(err, OperationType.WRITE, `databaseServices/${svc.id}`);
       }
     },
     [firebaseUser]
@@ -1347,8 +1450,22 @@ function MisafaWorkspaceApp() {
     }
   };
 
-  const handleUpdateGateways = async (paymentGateways: PaymentGatewayConfig[]) => {
-    await updateBusinessConfig({ paymentGateways });
+  const handleSaveGateways = async (
+    paymentGateways: PaymentGatewayConfig[],
+    secretUpdates: GatewaySecretUpdateMap
+  ) => {
+    const res = await fetch(`/api/businesses/${activeBusiness.id}/gateways`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ paymentGateways, secretUpdates }),
+    });
+    if (res.ok) {
+      const data = await res.json();
+      setBusinesses((prev) =>
+        prev.map((b) => (b.id === activeBusiness.id ? data.business : b))
+      );
+      await syncBusinessDocToCloud(data.business);
+    }
   };
 
   const handleUpdateLayoutConfig = async (layoutConfig: BusinessLayoutConfig) => {
@@ -1681,7 +1798,16 @@ function MisafaWorkspaceApp() {
       ...data.business,
       ownerId: firebaseUser?.uid,
     };
+    const createdSvc: DatabaseServiceInstance | null = data.service
+      ? {
+          ...data.service,
+          ownerId: firebaseUser?.uid || data.service.ownerId,
+        }
+      : null;
     setBusinesses((prev) => [...prev, createdBiz]);
+    if (createdSvc) {
+      setDatabaseServices((prev) => [...prev, createdSvc]);
+    }
     setStores((prev) => [...prev, data.store]);
     if (Array.isArray(data.employees)) setEmployees((prev) => [...prev, ...data.employees]);
     if (Array.isArray(data.products) && data.products.length > 0) {
@@ -1705,6 +1831,9 @@ function MisafaWorkspaceApp() {
     setTopTab('apps');
     setSelectedModule(null);
     await syncBusinessDocToCloud(createdBiz);
+    if (createdSvc) {
+      await syncServiceDocToCloud(createdSvc);
+    }
     await syncSubdocToCloud(createdBiz, 'stores', data.store.id, data.store);
     if (Array.isArray(data.employees)) {
       for (const emp of data.employees as EmployeeRecord[]) {
@@ -1838,11 +1967,151 @@ function MisafaWorkspaceApp() {
     }
   };
 
-  // Super Admin SaaS Control Plane Handlers
+  // Super Admin SaaS Control Plane & Database Service Handlers
   const ensureSuperAdminHeaders = () => ({
     'Content-Type': 'application/json',
     ...(sessionToken ? { Authorization: `Bearer ${sessionToken}` } : {}),
   });
+
+  const handleCreateService = async (payload: {
+    displayName: string;
+    slug: string;
+    systemCategory: DatabaseServiceInstance['systemCategory'];
+    customSystemLabel?: string;
+    parentGroupName?: string;
+    templateId: string;
+    region: DatabaseServiceInstance['region'];
+    country: 'KE' | 'UG' | 'TZ' | 'GB' | 'US';
+    currency: 'KES' | 'UGX' | 'TZS' | 'GBP' | 'USD';
+    taxPin: string;
+    etimsEnabled: boolean;
+    branchName: string;
+    branchLocation: string;
+    ownerName: string;
+    ownerEmail: string;
+    ownerPin: string;
+    subscriptionPlan: SubscriptionPlanId;
+    setupMode: 'clean' | 'starter';
+    ecommerceEnabled: boolean;
+  }) => {
+    const res = await fetch('/api/services', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+    const data = await res.json();
+    if (!res.ok) {
+      throw new Error(data.error || 'Unable to provision Database Service.');
+    }
+    const createdBiz: BusinessEntity = {
+      ...data.business,
+      ownerId: firebaseUser?.uid,
+    };
+    const createdSvc: DatabaseServiceInstance = {
+      ...data.service,
+      ownerId: firebaseUser?.uid || data.service.ownerId,
+    };
+    setBusinesses((prev) => [...prev, createdBiz]);
+    setDatabaseServices((prev) => [...prev, createdSvc]);
+    setStores((prev) => [...prev, data.store]);
+    if (Array.isArray(data.employees)) setEmployees((prev) => [...prev, ...data.employees]);
+    if (Array.isArray(data.products) && data.products.length > 0) {
+      setProducts((prev) => [...data.products, ...prev]);
+    }
+    if (data.platformUser) setPlatformUsers((prev) => [data.platformUser, ...prev]);
+    if (data.subscriptionInvoice) {
+      setSubscriptionInvoices((prev) => [data.subscriptionInvoice, ...prev]);
+    }
+    if (topTab !== 'super_admin') {
+      setActiveBusinessId(createdBiz.id);
+      setActiveStoreId(data.store.id);
+      setAccountTier('admin');
+      setActiveRole('Owner');
+      setActiveEmployee(
+        Array.isArray(data.employees) && data.employees.length > 0 ? data.employees[0] : null
+      );
+      if (!initialPosShortcut && typeof window !== 'undefined') {
+        window.history.replaceState(null, '', `/${createdBiz.slug}`);
+      }
+      setShowLanding(false);
+    }
+    await syncBusinessDocToCloud(createdBiz);
+    await syncServiceDocToCloud(createdSvc);
+    await syncSubdocToCloud(createdBiz, 'stores', data.store.id, data.store);
+    if (Array.isArray(data.employees)) {
+      for (const emp of data.employees as EmployeeRecord[]) {
+        await syncSubdocToCloud(createdBiz, 'employees', emp.id, emp as unknown as Record<string, unknown>);
+      }
+    }
+  };
+
+  const handleConnectService = async (serviceId: string) => {
+    const res = await fetch(`/api/services/${serviceId}/connect`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+    });
+    const data = await res.json();
+    if (!res.ok) {
+      throw new Error(data.error || 'Unable to connect to Database Service.');
+    }
+    if (data.service) {
+      setDatabaseServices((prev) =>
+        prev.map((s) => (s.id === serviceId ? data.service : s))
+      );
+      await syncServiceDocToCloud(data.service);
+    }
+    if (data.business) {
+      handleSelectBusiness(data.business.id);
+      setShowLanding(false);
+      setTopTab('apps');
+      setSelectedModule(null);
+    }
+  };
+
+  const handleUpdateService = async (
+    serviceId: string,
+    patch: Partial<{
+      displayName: string;
+      engineStatus: DatabaseServiceInstance['engineStatus'];
+      region: DatabaseServiceInstance['region'];
+      parentGroupName: string;
+      customSystemLabel: string;
+    }>
+  ) => {
+    const res = await fetch(`/api/services/${serviceId}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(patch),
+    });
+    const data = await res.json();
+    if (!res.ok) {
+      throw new Error(data.error || 'Unable to update Database Service.');
+    }
+    if (data.service) {
+      setDatabaseServices((prev) =>
+        prev.map((s) => (s.id === serviceId ? data.service : s))
+      );
+      await syncServiceDocToCloud(data.service);
+    }
+    if (data.business) {
+      setBusinesses((prev) =>
+        prev.map((b) => (b.id === data.business.id ? data.business : b))
+      );
+      await syncBusinessDocToCloud(data.business);
+    }
+  };
+
+  const handleDeleteService = async (serviceId: string) => {
+    const res = await fetch(`/api/services/${serviceId}`, {
+      method: 'DELETE',
+      headers: ensureSuperAdminHeaders(),
+    });
+    const data = await res.json();
+    if (!res.ok) {
+      throw new Error(data.error || 'Unable to decommission Database Service.');
+    }
+    setDatabaseServices((prev) => prev.filter((s) => s.id !== serviceId));
+  };
 
   const handleSuperAdminUpdateBusiness = async (
     businessId: string,
@@ -2073,6 +2342,49 @@ function MisafaWorkspaceApp() {
     }
   };
 
+  const handleBulkImportProducts = async (payload: {
+    storeId: string;
+    upsertExisting: boolean;
+    rows: Array<{
+      sku?: string;
+      barcode?: string;
+      name: string;
+      category?: string;
+      subCategory?: string;
+      shelfCode?: string;
+      price: number;
+      cost?: number;
+      taxCode?: string;
+      unit?: string;
+      reorderPoint?: number;
+      qty?: number;
+    }>;
+  }) => {
+    const res = await fetch('/api/products/bulk-import', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        businessId: activeBusiness.id,
+        storeId: payload.storeId,
+        upsertExisting: payload.upsertExisting,
+        rows: payload.rows,
+      }),
+    });
+    const data = await res.json();
+    if (!res.ok) {
+      throw new Error(data.error || 'Bulk import failed.');
+    }
+    if (Array.isArray(data.products)) {
+      setProducts(data.products);
+    }
+    return {
+      createdCount: Number(data.createdCount) || 0,
+      updatedCount: Number(data.updatedCount) || 0,
+      skippedCount: Number(data.skippedCount) || 0,
+      errors: Array.isArray(data.errors) ? (data.errors as string[]) : [],
+    };
+  };
+
   const handleAdjustStock = async (payload: {
     productId: string;
     storeId: string;
@@ -2270,6 +2582,9 @@ function MisafaWorkspaceApp() {
     deliveryFee?: number;
     freeDeliveryAbove?: number;
     storefrontPickupEnabled?: boolean;
+    ecommercePrefix?: EcommerceUrlPrefix;
+    ecommerceTemplateId?: EcommerceTemplateId;
+    seoConfig?: StorefrontSeoConfig;
   }) => {
     const res = await fetch(`/api/businesses/${activeBusiness.id}/domain`, {
       method: 'PATCH',
@@ -2475,6 +2790,7 @@ function MisafaWorkspaceApp() {
     subtitle: string;
     status: string;
     amount?: number;
+    meta?: Record<string, string | number | boolean>;
   }) => {
     const res = await fetch('/api/erp/records', {
       method: 'POST',
@@ -2482,12 +2798,122 @@ function MisafaWorkspaceApp() {
       body: JSON.stringify({
         ...payload,
         businessId: activeBusiness.id,
+        serviceId: activeService?.id,
         currency: activeBusiness.currency,
       }),
     });
     if (res.ok) {
       const data = await res.json();
       setErpRecords((prev) => [data.record, ...prev]);
+    }
+  };
+
+  const handleUpdateErpRecord = async (
+    recordId: string,
+    patch: {
+      status?: string;
+      title?: string;
+      subtitle?: string;
+      amount?: number;
+      meta?: Record<string, string | number | boolean>;
+    }
+  ) => {
+    const res = await fetch(`/api/erp/records/${recordId}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(patch),
+    });
+    if (res.ok) {
+      const data = await res.json();
+      setErpRecords((prev) => prev.map((r) => (r.id === recordId ? data.record : r)));
+      if (data.updatedProduct) {
+        setProducts((prev) =>
+          prev.map((p) => (p.id === data.updatedProduct.id ? data.updatedProduct : p))
+        );
+      }
+    }
+  };
+
+  const handleDeleteErpRecord = async (recordId: string) => {
+    const res = await fetch(`/api/erp/records/${recordId}`, {
+      method: 'DELETE',
+    });
+    if (res.ok) {
+      setErpRecords((prev) => prev.filter((r) => r.id !== recordId));
+    }
+  };
+
+  const handleSaveCommsConfig = async (
+    config: Partial<TenantCommsConfig> & {
+      smtpPassword?: string;
+      atApiKey?: string;
+      clearSmtpPassword?: boolean;
+      clearAtApiKey?: boolean;
+    }
+  ) => {
+    const res = await fetch(`/api/businesses/${activeBusiness.id}/communications`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(config),
+    });
+    const data = await res.json();
+    if (!res.ok) {
+      throw new Error(data.error || 'Unable to save communications settings.');
+    }
+    setBusinesses((prev) =>
+      prev.map((b) => (b.id === activeBusiness.id ? data.business : b))
+    );
+    await syncBusinessDocToCloud(data.business);
+  };
+
+  const handleTestComms = async (channel: 'email' | 'sms', target: string) => {
+    const res = await fetch(`/api/businesses/${activeBusiness.id}/communications/test`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ channel, target }),
+    });
+    const data = await res.json();
+    if (!res.ok) {
+      throw new Error(data.error || 'Communication test failed.');
+    }
+    return data as { ok: boolean; deliveryMode?: string; ref?: string };
+  };
+
+  const handleCreateCampaign = async (payload: {
+    name: string;
+    channel: MarketingCampaign['channel'];
+    segment: MarketingCampaign['segment'];
+    subject?: string;
+    message: string;
+    customRecipients?: string[];
+    sendNow: boolean;
+  }): Promise<MarketingCampaign | null> => {
+    const res = await fetch('/api/marketing/campaigns', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ ...payload, businessId: activeBusiness.id }),
+    });
+    const data = await res.json();
+    if (!res.ok) {
+      throw new Error(data.error || 'Unable to create campaign.');
+    }
+    if (data.campaign) {
+      setCampaigns((prev) => [data.campaign, ...prev]);
+      return data.campaign as MarketingCampaign;
+    }
+    return null;
+  };
+
+  const handleSendCampaign = async (campaignId: string) => {
+    const res = await fetch(`/api/marketing/campaigns/${campaignId}/send`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+    });
+    const data = await res.json();
+    if (res.ok && data.campaign) {
+      setCampaigns((prev) =>
+        prev.map((c) => (c.id === campaignId ? data.campaign : c))
+      );
     }
   };
 
@@ -2674,6 +3100,14 @@ function MisafaWorkspaceApp() {
         firebaseUserEmail={firebaseUser?.email}
         onGoogleSignIn={handleGoogleSignIn}
         onGoogleSignOut={handleGoogleSignOut}
+        activeServiceCode={activeService?.serviceCode || activeBusiness.serviceCode}
+        onOpenDatabaseService={() => {
+          const mod = APP_MODULES.find((m) => m.id === 'database_service');
+          if (mod) {
+            setSelectedModule(mod);
+            setTopTab('apps');
+          }
+        }}
       />
 
       {/* Mobile View Switcher */}
@@ -2782,7 +3216,47 @@ function MisafaWorkspaceApp() {
           ) : selectedModule.specialView === 'payments' ? (
             <PaymentGatewaysView
               business={activeBusiness}
-              onUpdateGateways={handleUpdateGateways}
+              onSaveGateways={handleSaveGateways}
+            />
+          ) : selectedModule.specialView === 'marketing' ? (
+            <MarketingWorkspace
+              module={selectedModule}
+              business={activeBusiness}
+              campaigns={businessCampaigns}
+              crmLeads={businessCrmLeads}
+              transactions={businessTransactions}
+              onlineOrders={businessOnlineOrders}
+              onSaveCommsConfig={handleSaveCommsConfig}
+              onTestComms={handleTestComms}
+              onCreateCampaign={handleCreateCampaign}
+              onSendCampaign={handleSendCampaign}
+            />
+          ) : selectedModule.specialView === 'database_service' ? (
+            <DatabaseServiceWorkspace
+              services={databaseServices}
+              businesses={businesses}
+              stores={stores}
+              products={products}
+              erpRecords={erpRecords}
+              activeBusinessId={activeBusiness.id}
+              subscriptionPlans={subscriptionPlans}
+              isAdmin={accountTier === 'admin'}
+              onConnectService={handleConnectService}
+              onCreateService={handleCreateService}
+              onUpdateService={handleUpdateService}
+              onOpenAppsAfterConnect={() => {
+                setSelectedModule(null);
+                setTopTab('apps');
+              }}
+            />
+          ) : selectedModule.specialView === 'settings' ? (
+            <BusinessSettingsWorkspace
+              business={activeBusiness}
+              onSaveSettings={updateBusinessConfig}
+              onJumpToModule={(modId) => {
+                const target = APP_MODULES.find((m) => m.id === modId);
+                if (target) setSelectedModule(target);
+              }}
             />
           ) : selectedModule.specialView === 'field' ? (
             <FieldAgentView
@@ -2901,6 +3375,9 @@ function MisafaWorkspaceApp() {
               onSlotStatusChange={handleSlotStatusChange}
               onReceivePurchaseOrder={handleReceivePurchaseOrder}
               onCreateRecord={handleCreateErpRecord}
+              onUpdateRecord={handleUpdateErpRecord}
+              onDeleteRecord={handleDeleteErpRecord}
+              onBulkImportProducts={handleBulkImportProducts}
             />
           )
         ) : topTab === 'etims' ? (
@@ -2922,6 +3399,7 @@ function MisafaWorkspaceApp() {
         ) : topTab === 'super_admin' && accountTier === 'admin' ? (
           <SuperAdminView
             businesses={businesses}
+            databaseServices={databaseServices}
             stores={stores}
             employees={employees}
             products={products}
@@ -2935,6 +3413,9 @@ function MisafaWorkspaceApp() {
               setSelectedModule(null);
               setTopTab('apps');
             }}
+            onCreateService={handleCreateService}
+            onUpdateService={handleUpdateService}
+            onDeleteService={handleDeleteService}
             onRequestSupportAccess={handleRequestSupportAccess}
             onUpdateBusinessSubscription={handleSuperAdminUpdateBusiness}
             onAddBranchToBusiness={handleSuperAdminAddBranch}

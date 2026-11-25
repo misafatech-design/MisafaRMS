@@ -2,10 +2,12 @@ import React from 'react';
 import {
   Building2,
   CloudOff,
+  Database,
   Globe,
   LogIn,
   LogOut,
   Moon,
+  PlugZap,
   Plus,
   RefreshCw,
   Shield,
@@ -40,6 +42,8 @@ interface WorkspaceToolbarProps {
   firebaseUserEmail?: string | null;
   onGoogleSignIn: () => void;
   onGoogleSignOut: () => void;
+  activeServiceCode?: string;
+  onOpenDatabaseService?: () => void;
 }
 
 const ROLES: UserRole[] = [
@@ -76,6 +80,8 @@ export const WorkspaceToolbar: React.FC<WorkspaceToolbarProps> = ({
   firebaseUserEmail,
   onGoogleSignIn,
   onGoogleSignOut,
+  activeServiceCode,
+  onOpenDatabaseService,
 }) => {
   return (
     <div className="border-b border-slate-200 bg-slate-50/80 dark:border-slate-800 dark:bg-slate-900/60">
@@ -118,6 +124,18 @@ export const WorkspaceToolbar: React.FC<WorkspaceToolbarProps> = ({
                 </option>
               ))}
             </select>
+            {onOpenDatabaseService && (
+              <button
+                type="button"
+                onClick={onOpenDatabaseService}
+                title="Open Database Service Engine & Connect"
+                className="ml-1 inline-flex items-center gap-1 rounded border border-teal-200 bg-teal-50 px-2 py-0.5 font-mono text-[10px] font-semibold text-teal-800 hover:bg-teal-100 whitespace-nowrap shrink-0 dark:border-teal-800 dark:bg-teal-950/50 dark:text-teal-300"
+              >
+                <Database className="h-3 w-3" />
+                <span>{activeServiceCode || activeBusiness.serviceCode || 'DB'}</span>
+                <PlugZap className="h-2.5 w-2.5" />
+              </button>
+            )}
           </div>
 
           <div className="flex items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-2.5 py-1.5 dark:border-slate-700 dark:bg-slate-900">

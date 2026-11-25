@@ -7,12 +7,14 @@ import {
   ChevronRight,
   Clock,
   CreditCard,
+  Database,
   ExternalLink,
   Globe,
   KeyRound,
   LayoutDashboard,
   Layers,
   Lock,
+  PlugZap,
   Plus,
   Receipt,
   Save,
@@ -20,6 +22,7 @@ import {
   ShieldAlert,
   ShieldCheck,
   Store,
+  Trash2,
   Unlock,
   UserPlus,
   Users,
@@ -27,6 +30,8 @@ import {
 } from 'lucide-react';
 import {
   BusinessEntity,
+  DatabaseServiceInstance,
+  DatabaseSystemCategory,
   EmployeeRecord,
   PlatformBillingGateway,
   PlatformUserRecord,
@@ -42,6 +47,7 @@ import { BUSINESS_INDUSTRY_TEMPLATES } from '../data/businessTemplates';
 type SuperAdminSection =
   | 'overview'
   | 'businesses'
+  | 'services'
   | 'access_requests'
   | 'users'
   | 'templates'
@@ -50,6 +56,7 @@ type SuperAdminSection =
 
 interface SuperAdminViewProps {
   businesses: BusinessEntity[];
+  databaseServices: DatabaseServiceInstance[];
   stores: StoreBranch[];
   employees: EmployeeRecord[];
   products: ProductItem[];
@@ -59,6 +66,38 @@ interface SuperAdminViewProps {
   subscriptionInvoices: SubscriptionInvoice[];
   currentUserEmail?: string | null;
   onSwitchToBusiness: (businessId: string) => void;
+  onCreateService?: (payload: {
+    displayName: string;
+    slug: string;
+    systemCategory: DatabaseSystemCategory;
+    customSystemLabel?: string;
+    parentGroupName?: string;
+    templateId: string;
+    region: DatabaseServiceInstance['region'];
+    country: 'KE' | 'UG' | 'TZ' | 'GB' | 'US';
+    currency: 'KES' | 'UGX' | 'TZS' | 'GBP' | 'USD';
+    taxPin: string;
+    etimsEnabled: boolean;
+    branchName: string;
+    branchLocation: string;
+    ownerName: string;
+    ownerEmail: string;
+    ownerPin: string;
+    subscriptionPlan: SubscriptionPlanId;
+    setupMode: 'clean' | 'starter';
+    ecommerceEnabled: boolean;
+  }) => Promise<void>;
+  onUpdateService?: (
+    serviceId: string,
+    patch: Partial<{
+      displayName: string;
+      engineStatus: DatabaseServiceInstance['engineStatus'];
+      region: DatabaseServiceInstance['region'];
+      parentGroupName: string;
+      customSystemLabel: string;
+    }>
+  ) => Promise<void>;
+  onDeleteService?: (serviceId: string) => Promise<void>;
   onRequestSupportAccess: (
     businessId: string,
     reason: string,
@@ -120,6 +159,7 @@ function isSupportAccessActive(biz: BusinessEntity): boolean {
 
 export const SuperAdminView: React.FC<SuperAdminViewProps> = ({
   businesses,
+  databaseServices,
   stores,
   employees,
   products,
@@ -129,6 +169,9 @@ export const SuperAdminView: React.FC<SuperAdminViewProps> = ({
   subscriptionInvoices,
   currentUserEmail,
   onSwitchToBusiness,
+  onCreateService,
+  onUpdateService,
+  onDeleteService,
   onRequestSupportAccess,
   onUpdateBusinessSubscription,
   onAddBranchToBusiness,
@@ -188,6 +231,19 @@ export const SuperAdminView: React.FC<SuperAdminViewProps> = ({
   const [customGwMode, setCustomGwMode] = useState<PlatformBillingGateway['mode']>('Custom');
   const [customGwAccount, setCustomGwAccount] = useState('');
   const [customGwCurrencies, setCustomGwCurrencies] = useState('KES, USD');
+
+  // Database Services management state
+  const [svcSearch, setSvcSearch] = useState('');
+  const [svcCatFilter, setSvcCatFilter] = useState<'all' | DatabaseSystemCategory>('all');
+  const [newSvcName, setNewSvcName] = useState('');
+  const [newSvcSlug, setNewSvcSlug] = useState('');
+  const [newSvcCat, setNewSvcCat] = useState<DatabaseSystemCategory>('restaurant');
+  const [newSvcCustomLabel, setNewSvcCustomLabel] = useState('');
+  const [newSvcGroup, setNewSvcGroup] = useState('');
+  const [newSvcRegion, setNewSvcRegion] = useState<DatabaseServiceInstance['region']>('ke-nairobi-1');
+  const [newSvcOwnerName, setNewSvcOwnerName] = useState('');
+  const [newSvcOwnerEmail, setNewSvcOwnerEmail] = useState('');
+  const [creatingSvc, setCreatingSvc] = useState(false);
 
   const notify = (msg: string) => {
     setBanner(msg);
@@ -382,6 +438,12 @@ export const SuperAdminView: React.FC<SuperAdminViewProps> = ({
       label: 'Tenants & Branches',
       icon: <Building2 className="h-4 w-4" />,
       count: businesses.length,
+    },
+    {
+      id: 'services',
+      label: 'Database Services',
+      icon: <Database className="h-4 w-4" />,
+      count: databaseServices.length,
     },
     {
       id: 'access_requests',
@@ -774,6 +836,8 @@ export const SuperAdminView: React.FC<SuperAdminViewProps> = ({
                           </div>
 
                           <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">
+                            {biz.serviceCode ? `${biz.serviceCode} · ` : ''}
+                            {biz.systemCategory ? `${biz.systemCategory} · ` : ''}
                             {consented ? (
                               <>
                                 Owner: {biz.ownerName || 'Admin'} ({biz.ownerEmail || 'owner@misafarms.com'}) · Tax PIN:{' '}
@@ -1312,6 +1376,322 @@ export const SuperAdminView: React.FC<SuperAdminViewProps> = ({
                   </button>
                 </div>
               )}
+            </section>
+          </div>
+        )}
+
+        {/* VIEW 2B: DATABASE SERVICES CONTROL */}
+        {section === 'services' && (
+          <div className="space-y-5">
+            {onCreateService && (
+              <form
+                onSubmit={async (e) => {
+                  e.preventDefault();
+                  if (!newSvcName.trim()) return;
+                  setCreatingSvc(true);
+                  try {
+                    const slugVal = (newSvcSlug || newSvcName)
+                      .toLowerCase()
+                      .replace(/[^a-z0-9-]+/g, '-')
+                      .replace(/^-|-$/g, '')
+                      .slice(0, 48);
+                    await onCreateService({
+                      displayName: newSvcName.trim(),
+                      slug: slugVal,
+                      systemCategory: newSvcCat,
+                      customSystemLabel:
+                        newSvcCat === 'custom' && newSvcCustomLabel.trim()
+                          ? newSvcCustomLabel.trim()
+                          : undefined,
+                      parentGroupName: newSvcGroup.trim() || undefined,
+                      templateId: newSvcCat,
+                      region: newSvcRegion,
+                      country: newSvcRegion === 'eu-west-2' ? 'GB' : 'KE',
+                      currency: newSvcRegion === 'eu-west-2' ? 'GBP' : 'KES',
+                      taxPin: 'P051900120K',
+                      etimsEnabled: newSvcRegion !== 'eu-west-2',
+                      branchName: 'HQ Branch',
+                      branchLocation: newSvcRegion === 'eu-west-2' ? 'London' : 'Nairobi',
+                      ownerName: newSvcOwnerName.trim() || 'Service Owner',
+                      ownerEmail: newSvcOwnerEmail.trim() || `admin@${slugVal}.misafarms.com`,
+                      ownerPin: '1234',
+                      subscriptionPlan: 'Trial',
+                      setupMode: 'starter',
+                      ecommerceEnabled: true,
+                    });
+                    notify(`Provisioned Database Service "${newSvcName.trim()}" (${newSvcCat}).`);
+                    setNewSvcName('');
+                    setNewSvcSlug('');
+                    setNewSvcCustomLabel('');
+                    setNewSvcGroup('');
+                    setNewSvcOwnerName('');
+                    setNewSvcOwnerEmail('');
+                  } finally {
+                    setCreatingSvc(false);
+                  }
+                }}
+                className="rounded-xl border border-slate-200 bg-white p-5 dark:border-slate-800 dark:bg-slate-900"
+              >
+                <div className="mb-3 flex items-center justify-between">
+                  <div>
+                    <h2 className="font-display text-sm font-bold text-slate-900 dark:text-slate-100">
+                      Provision Business Database Service
+                    </h2>
+                    <p className="text-xs text-slate-500 dark:text-slate-400">
+                      Spin up a dedicated vertical system (Restaurant, Hardware, Rentals, Supermarket, or Custom) for any tenant.
+                    </p>
+                  </div>
+                </div>
+                <div className="grid grid-cols-1 gap-2.5 sm:grid-cols-2 lg:grid-cols-4">
+                  <input
+                    type="text"
+                    required
+                    value={newSvcName}
+                    onChange={(e) => {
+                      setNewSvcName(e.target.value);
+                      if (!newSvcSlug) {
+                        setNewSvcSlug(
+                          e.target.value
+                            .toLowerCase()
+                            .replace(/[^a-z0-9-]+/g, '-')
+                            .replace(/^-|-$/g, '')
+                        );
+                      }
+                    }}
+                    placeholder="Service / Business Name"
+                    className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-xs dark:border-slate-700 dark:bg-slate-800"
+                  />
+                  <input
+                    type="text"
+                    value={newSvcSlug}
+                    onChange={(e) =>
+                      setNewSvcSlug(e.target.value.toLowerCase().replace(/[^a-z0-9-]+/g, '-'))
+                    }
+                    placeholder="Domain slug (misafarms.com/...)"
+                    className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 font-mono text-xs dark:border-slate-700 dark:bg-slate-800"
+                  />
+                  <select
+                    value={newSvcCat}
+                    onChange={(e) => setNewSvcCat(e.target.value as DatabaseSystemCategory)}
+                    className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-xs dark:border-slate-700 dark:bg-slate-800"
+                  >
+                    <option value="restaurant">System: Restaurant &amp; Dining</option>
+                    <option value="hardware">System: Hardware &amp; Timber</option>
+                    <option value="rentals">System: Rentals &amp; Leasing</option>
+                    <option value="supermarket">System: Supermarket &amp; Retail</option>
+                    <option value="pharmacy">System: Pharmacy &amp; Clinic</option>
+                    <option value="fashion">System: Fashion &amp; Apparel</option>
+                    <option value="electronics">System: Electronics &amp; Tech</option>
+                    <option value="salon">System: Salon &amp; Spa</option>
+                    <option value="wholesale">System: Wholesale Depot</option>
+                    <option value="custom">System: Custom Vertical</option>
+                  </select>
+                  <select
+                    value={newSvcRegion}
+                    onChange={(e) =>
+                      setNewSvcRegion(e.target.value as DatabaseServiceInstance['region'])
+                    }
+                    className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-xs dark:border-slate-700 dark:bg-slate-800"
+                  >
+                    <option value="ke-nairobi-1">Region: Nairobi (ke-nairobi-1)</option>
+                    <option value="af-south-1">Region: Cape Town (af-south-1)</option>
+                    <option value="eu-west-2">Region: London (eu-west-2)</option>
+                  </select>
+                  {newSvcCat === 'custom' && (
+                    <input
+                      type="text"
+                      required
+                      value={newSvcCustomLabel}
+                      onChange={(e) => setNewSvcCustomLabel(e.target.value)}
+                      placeholder="Custom system type (e.g. Auto Garage)"
+                      className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-xs dark:border-slate-700 dark:bg-slate-800"
+                    />
+                  )}
+                  <input
+                    type="text"
+                    value={newSvcGroup}
+                    onChange={(e) => setNewSvcGroup(e.target.value)}
+                    placeholder="Parent Group (optional)"
+                    className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-xs dark:border-slate-700 dark:bg-slate-800"
+                  />
+                  <input
+                    type="text"
+                    value={newSvcOwnerName}
+                    onChange={(e) => setNewSvcOwnerName(e.target.value)}
+                    placeholder="Owner Name"
+                    className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-xs dark:border-slate-700 dark:bg-slate-800"
+                  />
+                  <input
+                    type="email"
+                    value={newSvcOwnerEmail}
+                    onChange={(e) => setNewSvcOwnerEmail(e.target.value)}
+                    placeholder="Owner Email"
+                    className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-xs dark:border-slate-700 dark:bg-slate-800"
+                  />
+                  <button
+                    type="submit"
+                    disabled={creatingSvc}
+                    className="inline-flex items-center justify-center gap-1.5 rounded-lg bg-teal-700 px-4 py-2 text-xs font-semibold text-white hover:bg-teal-800 disabled:opacity-50 dark:bg-teal-600"
+                  >
+                    <Plus className="h-3.5 w-3.5" />
+                    <span>{creatingSvc ? 'Provisioning...' : 'Add Database Service'}</span>
+                  </button>
+                </div>
+              </form>
+            )}
+
+            <section className="rounded-xl border border-slate-200 bg-white dark:border-slate-800 dark:bg-slate-900">
+              <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-200 px-5 py-3.5 dark:border-slate-800">
+                <div>
+                  <h2 className="font-display text-sm font-bold text-slate-900 dark:text-slate-100">
+                    All Platform Database Services ({databaseServices.length})
+                  </h2>
+                  <p className="text-xs text-slate-500 dark:text-slate-400">
+                    Manage service engines across businesses. Entering a tenant workspace still requires Owner Zero-Trust consent.
+                  </p>
+                </div>
+                <div className="flex flex-wrap items-center gap-2">
+                  <div className="relative">
+                    <Search className="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-slate-400" />
+                    <input
+                      type="text"
+                      value={svcSearch}
+                      onChange={(e) => setSvcSearch(e.target.value)}
+                      placeholder="Filter services..."
+                      className="rounded-lg border border-slate-200 bg-slate-50 py-1.5 pl-8 pr-3 text-xs dark:border-slate-700 dark:bg-slate-800"
+                    />
+                  </div>
+                  <select
+                    value={svcCatFilter}
+                    onChange={(e) =>
+                      setSvcCatFilter(e.target.value as 'all' | DatabaseSystemCategory)
+                    }
+                    className="rounded-lg border border-slate-200 bg-slate-50 px-2.5 py-1.5 text-xs dark:border-slate-700 dark:bg-slate-800"
+                  >
+                    <option value="all">All Systems</option>
+                    <option value="restaurant">Restaurant</option>
+                    <option value="hardware">Hardware</option>
+                    <option value="rentals">Rentals</option>
+                    <option value="supermarket">Supermarket</option>
+                    <option value="pharmacy">Pharmacy</option>
+                    <option value="custom">Custom</option>
+                  </select>
+                </div>
+              </div>
+
+              <div className="overflow-x-auto">
+                <table className="w-full text-left text-xs">
+                  <thead className="border-b border-slate-200 bg-slate-50 text-slate-500 dark:border-slate-800 dark:bg-slate-800/50">
+                    <tr>
+                      <th className="px-5 py-2.5">Service</th>
+                      <th className="px-5 py-2.5">System Vertical</th>
+                      <th className="px-5 py-2.5">Domain</th>
+                      <th className="px-5 py-2.5">Region &amp; Nodes</th>
+                      <th className="px-5 py-2.5">Engine Status</th>
+                      <th className="px-5 py-2.5 text-right">Connect / Actions</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
+                    {databaseServices
+                      .filter((svc) => {
+                        if (svcCatFilter !== 'all' && svc.systemCategory !== svcCatFilter) return false;
+                        const q = svcSearch.trim().toLowerCase();
+                        if (!q) return true;
+                        return (
+                          svc.displayName.toLowerCase().includes(q) ||
+                          svc.serviceCode.toLowerCase().includes(q) ||
+                          svc.slug.toLowerCase().includes(q) ||
+                          (svc.parentGroupName || '').toLowerCase().includes(q)
+                        );
+                      })
+                      .map((svc) => {
+                        const biz = businesses.find((b) => b.id === svc.businessId);
+                        const consented = biz ? isSupportAccessActive(biz) : false;
+                        const branchCount = stores.filter((st) => st.businessId === svc.businessId).length;
+                        return (
+                          <tr key={svc.id} className="hover:bg-slate-50/70 dark:hover:bg-slate-800/40">
+                            <td className="px-5 py-3">
+                              <p className="font-semibold text-slate-900 dark:text-slate-100">
+                                {svc.displayName}
+                              </p>
+                              <p className="font-mono text-[11px] text-slate-500">
+                                {svc.serviceCode}
+                                {svc.parentGroupName ? ` · ${svc.parentGroupName}` : ''}
+                              </p>
+                            </td>
+                            <td className="px-5 py-3 capitalize text-slate-700 dark:text-slate-300">
+                              {svc.systemCategory === 'custom' && svc.customSystemLabel
+                                ? svc.customSystemLabel
+                                : svc.systemCategory}
+                            </td>
+                            <td className="px-5 py-3 font-mono text-[11px] text-slate-600 dark:text-slate-400">
+                              misafarms.com/{svc.slug}
+                            </td>
+                            <td className="px-5 py-3 font-mono text-[11px] tabular-nums text-slate-600 dark:text-slate-400">
+                              {svc.region} · {branchCount} branch{branchCount === 1 ? '' : 'es'}
+                            </td>
+                            <td className="px-5 py-3">
+                              {onUpdateService ? (
+                                <select
+                                  aria-label={`Engine status for ${svc.displayName}`}
+                                  value={svc.engineStatus}
+                                  onChange={async (e) => {
+                                    const next = e.target.value as DatabaseServiceInstance['engineStatus'];
+                                    await onUpdateService(svc.id, { engineStatus: next });
+                                    notify(`Updated ${svc.serviceCode} engine status -> ${next}.`);
+                                  }}
+                                  className="rounded border border-slate-200 bg-slate-50 px-2 py-1 text-xs dark:border-slate-700 dark:bg-slate-800"
+                                >
+                                  <option value="online">Online</option>
+                                  <option value="maintenance">Maintenance</option>
+                                  <option value="suspended">Suspended</option>
+                                </select>
+                              ) : (
+                                <span className="capitalize">{svc.engineStatus}</span>
+                              )}
+                            </td>
+                            <td className="px-5 py-3 text-right">
+                              <div className="inline-flex items-center gap-1.5">
+                                {biz && consented ? (
+                                  <button
+                                    type="button"
+                                    onClick={() => onSwitchToBusiness(biz.id)}
+                                    className="inline-flex items-center gap-1 rounded-lg bg-slate-900 px-2.5 py-1 text-[11px] font-semibold text-white hover:bg-slate-800 dark:bg-teal-600"
+                                  >
+                                    <PlugZap className="h-3 w-3" />
+                                    <span>Connect</span>
+                                  </button>
+                                ) : biz ? (
+                                  <button
+                                    type="button"
+                                    onClick={() => setAccessModalBiz(biz)}
+                                    className="inline-flex items-center gap-1 rounded-lg border border-teal-700 bg-teal-50 px-2.5 py-1 text-[11px] font-semibold text-teal-800 hover:bg-teal-100 dark:border-teal-600 dark:bg-teal-950/50 dark:text-teal-300"
+                                  >
+                                    <Lock className="h-3 w-3" />
+                                    <span>Request Connect</span>
+                                  </button>
+                                ) : null}
+                                {onDeleteService && databaseServices.length > 1 && (
+                                  <button
+                                    type="button"
+                                    onClick={async () => {
+                                      await onDeleteService(svc.id);
+                                      notify(`Removed Database Service ${svc.serviceCode}.`);
+                                    }}
+                                    title="Decommission service"
+                                    className="rounded p-1.5 text-rose-600 hover:bg-rose-50 dark:hover:bg-rose-950/40"
+                                  >
+                                    <Trash2 className="h-3.5 w-3.5" />
+                                  </button>
+                                )}
+                              </div>
+                            </td>
+                          </tr>
+                        );
+                      })}
+                  </tbody>
+                </table>
+              </div>
             </section>
           </div>
         )}

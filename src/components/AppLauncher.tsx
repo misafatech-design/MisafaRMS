@@ -189,16 +189,29 @@ export const AppLauncher: React.FC<AppLauncherProps> = ({
                   </button>
                 )}
                 {accountTier === 'admin' && (
-                  <button
-                    type="button"
-                    onClick={() => {
-                      const posAdminMod = APP_MODULES.find((m) => m.id === 'pos_settings');
-                      if (posAdminMod) onLaunchModule(posAdminMod);
-                    }}
-                    className="rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs font-medium text-slate-700 transition-colors hover:bg-slate-50 whitespace-nowrap shrink-0 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-200 dark:hover:bg-slate-700"
-                  >
-                    POS Setup &amp; Z-Reports
-                  </button>
+                  <>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const dbMod = APP_MODULES.find((m) => m.id === 'database_service');
+                        if (dbMod) onLaunchModule(dbMod);
+                      }}
+                      className="inline-flex items-center gap-1 rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs font-medium text-slate-700 transition-colors hover:bg-slate-50 whitespace-nowrap shrink-0 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-200 dark:hover:bg-slate-700"
+                    >
+                      <Icons.Database className="h-3.5 w-3.5 text-teal-700 dark:text-teal-400" />
+                      <span>Database Service</span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const posAdminMod = APP_MODULES.find((m) => m.id === 'pos_settings');
+                        if (posAdminMod) onLaunchModule(posAdminMod);
+                      }}
+                      className="rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs font-medium text-slate-700 transition-colors hover:bg-slate-50 whitespace-nowrap shrink-0 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-200 dark:hover:bg-slate-700"
+                    >
+                      POS Setup &amp; Z-Reports
+                    </button>
+                  </>
                 )}
               </div>
             </div>

@@ -60,7 +60,16 @@
         "deliveryFee": { "type": "number" },
         "freeDeliveryAbove": { "type": "number" },
         "storefrontPickupEnabled": { "type": "boolean" },
+        "ecommercePrefix": { "type": "string", "enum": ["shop", "store", "market", "order", "menu", "catalogue"] },
+        "ecommerceTemplateId": { "type": "string", "enum": ["nairobi_minimal", "farm_harvest", "boutique_editorial", "tech_grid", "bistro_menu"] },
+        "seoConfig": { "type": "object" },
+        "commsConfig": { "type": "object" },
+        "tenantSettings": { "type": "object" },
         "templateId": { "type": "string", "maxLength": 64 },
+        "serviceCode": { "type": "string", "maxLength": 40 },
+        "systemCategory": { "type": "string", "enum": ["supermarket", "restaurant", "hardware", "rentals", "pharmacy", "fashion", "electronics", "salon", "wholesale", "custom"] },
+        "customSystemLabel": { "type": "string", "maxLength": 80 },
+        "parentGroupName": { "type": "string", "maxLength": 100 },
         "supportAccess": { "type": "object" },
         "hardwareConfig": { "type": "object" },
         "createdAt": { "type": "string", "format": "date-time" },
@@ -254,6 +263,29 @@
       },
       "required": ["id", "ownerId", "receiptNo", "storeId", "total", "etimsCuin", "etimsStatus", "createdAt"]
     },
+    "DatabaseServiceInstance": {
+      "title": "DatabaseServiceInstance",
+      "description": "Isolated business database service instance for a specific vertical system",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "ownerId": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "businessId": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "serviceCode": { "type": "string", "minLength": 2, "maxLength": 40 },
+        "displayName": { "type": "string", "minLength": 1, "maxLength": 120 },
+        "slug": { "type": "string", "minLength": 2, "maxLength": 64 },
+        "systemCategory": { "type": "string", "enum": ["supermarket", "restaurant", "hardware", "rentals", "pharmacy", "fashion", "electronics", "salon", "wholesale", "custom"] },
+        "customSystemLabel": { "type": "string", "maxLength": 80 },
+        "parentGroupName": { "type": "string", "maxLength": 100 },
+        "templateId": { "type": "string", "maxLength": 64 },
+        "engineStatus": { "type": "string", "enum": ["online", "maintenance", "suspended"] },
+        "region": { "type": "string", "enum": ["ke-nairobi-1", "eu-west-2", "af-south-1"] },
+        "planId": { "type": "string", "enum": ["Trial", "Starter", "Multi-Store Pro", "Enterprise"] },
+        "lastConnectedAt": { "type": "string", "maxLength": 40 },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["id", "ownerId", "businessId", "serviceCode", "displayName", "slug", "systemCategory", "engineStatus", "createdAt"]
+    },
     "ErpRecord": {
       "title": "ErpRecord",
       "description": "Generic operational record linked to any of the 50 installed Odoo/Dynamics modules",
@@ -262,14 +294,20 @@
         "id": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
         "ownerId": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
         "moduleId": { "type": "string", "minLength": 1, "maxLength": 60 },
+        "serviceId": { "type": "string", "maxLength": 128 },
         "title": { "type": "string", "minLength": 1, "maxLength": 140 },
         "status": { "type": "string", "minLength": 1, "maxLength": 60 },
-        "date": { "type": "string", "maxLength": 30 }
+        "date": { "type": "string", "maxLength": 30 },
+        "meta": { "type": "object" }
       },
       "required": ["id", "ownerId", "moduleId", "title", "status", "date"]
     }
   },
   "firestore": {
+    "/databaseServices/{serviceId}": {
+      "schema": { "$ref": "#/entities/DatabaseServiceInstance" },
+      "description": "Isolated Database Service instances per vertical business system"
+    },
     "/admins/{userId}": {
       "schema": { "$ref": "#/entities/UserAccount" },
       "description": "Trusted administrator lookup documents"

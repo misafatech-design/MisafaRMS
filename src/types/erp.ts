@@ -123,16 +123,47 @@ export interface BusinessSupportAccess {
   allowWorkspaceEnter?: boolean;
 }
 
+export type GatewayProviderId =
+  | 'mpesa_daraja'
+  | 'airtel_money'
+  | 'pesapal_card'
+  | 'dpo_pay'
+  | 'paystack'
+  | 'instapay'
+  | 'payhero'
+  | 'tkash'
+  | 'bank_rtgs'
+  | 'cash'
+  | 'custom';
+
 export interface PaymentGatewayConfig {
   id: string;
-  provider: 'mpesa_daraja' | 'airtel_money' | 'pesapal_card' | 'tkash' | 'bank_rtgs' | 'cash' | 'custom';
+  provider: GatewayProviderId;
   displayName: string;
   enabled: boolean;
-  mode: 'Paybill' | 'Buy Goods Till' | 'Card Terminal' | 'Cash Drawer' | 'Bank Transfer' | 'Custom';
+  mode:
+    | 'Paybill'
+    | 'Buy Goods Till'
+    | 'STK Push API'
+    | 'Hosted Checkout'
+    | 'Card Terminal'
+    | 'Cash Drawer'
+    | 'Bank Transfer'
+    | 'Custom';
   shortcodeOrTill: string;
   accountPrefix: string;
   environment: 'Production' | 'Sandbox';
   stkPushSupported: boolean;
+  transactionType?: 'CustomerPayBillOnline' | 'CustomerBuyGoodsOnline';
+  publicKey?: string;
+  merchantId?: string;
+  callbackUrl?: string;
+  currencies?: string[];
+  hasConsumerKey?: boolean;
+  hasConsumerSecret?: boolean;
+  hasPasskey?: boolean;
+  hasSecretKey?: boolean;
+  maskedKeyPreview?: string;
 }
 
 export interface EmployeePermissionSet {
@@ -258,12 +289,113 @@ export interface SubscriptionInvoice {
   paidAt?: string;
 }
 
+export type EcommerceUrlPrefix = 'shop' | 'store' | 'market' | 'order' | 'menu' | 'catalogue';
+
+export type EcommerceTemplateId =
+  | 'nairobi_minimal'
+  | 'farm_harvest'
+  | 'boutique_editorial'
+  | 'tech_grid'
+  | 'bistro_menu';
+
+export interface StorefrontSeoConfig {
+  metaTitle?: string;
+  metaDescription?: string;
+  keywords?: string;
+  canonicalBase?: string;
+  ogImageUrl?: string;
+  schemaType?: 'Store' | 'LocalBusiness' | 'Restaurant' | 'Product';
+  indexable?: boolean;
+}
+
+export interface TenantCommsConfig {
+  smtpHost?: string;
+  smtpPort?: number;
+  smtpSecure?: boolean;
+  smtpUsername?: string;
+  smtpFromName?: string;
+  smtpFromEmail?: string;
+  hasSmtpPassword?: boolean;
+  smsProvider?: 'africastalking';
+  atUsername?: string;
+  atSenderId?: string;
+  atEnvironment?: 'sandbox' | 'production';
+  hasAtApiKey?: boolean;
+}
+
+export interface TenantSettings {
+  invoicePrefix?: string;
+  quotePrefix?: string;
+  receiptPrefix?: string;
+  fiscalYearStart?: string;
+  lowStockThreshold?: number;
+  loyaltyPointsPerKes?: number;
+  autoEmailReceipt?: boolean;
+  smsOrderAlerts?: boolean;
+  allowNegativeStock?: boolean;
+  primaryColor?: string;
+}
+
+export interface MarketingCampaign {
+  id: string;
+  businessId: string;
+  name: string;
+  channel: 'email' | 'sms' | 'social' | 'survey';
+  segment: 'all' | 'pos_customers' | 'online_buyers' | 'crm_leads' | 'custom';
+  subject?: string;
+  message: string;
+  status: 'Draft' | 'Scheduled' | 'Sent';
+  recipientCount: number;
+  deliveredCount: number;
+  failedCount: number;
+  deliveryMode?: string;
+  providerRef?: string;
+  customRecipients?: string[];
+  scheduledAt?: string;
+  createdAt: string;
+  sentAt?: string;
+}
+
+export type DatabaseSystemCategory =
+  | 'supermarket'
+  | 'restaurant'
+  | 'hardware'
+  | 'rentals'
+  | 'pharmacy'
+  | 'fashion'
+  | 'electronics'
+  | 'salon'
+  | 'wholesale'
+  | 'custom';
+
+export interface DatabaseServiceInstance {
+  id: string;
+  ownerId?: string;
+  businessId: string;
+  serviceCode: string;
+  displayName: string;
+  slug: string;
+  systemCategory: DatabaseSystemCategory;
+  customSystemLabel?: string;
+  parentGroupName?: string;
+  templateId: string;
+  engineStatus: 'online' | 'maintenance' | 'suspended';
+  region: 'ke-nairobi-1' | 'eu-west-2' | 'af-south-1';
+  planId: SubscriptionPlanId;
+  lastConnectedAt?: string;
+  createdAt: string;
+}
+
 export interface BusinessEntity {
   id: string;
   ownerId?: string;
   ownerName?: string;
   ownerEmail?: string;
   templateId?: string;
+  serviceCode?: string;
+  systemCategory?: DatabaseSystemCategory;
+  customSystemLabel?: string;
+  parentGroupName?: string;
   supportAccess?: BusinessSupportAccess;
   slug: string;
   name: string;
@@ -280,8 +412,10 @@ export interface BusinessEntity {
   monthlyFee?: number;
   branchLimit?: number;
   subscriptionRenewsAt?: string;
-  // eCommerce & Domain Configuration
+  // eCommerce, URL Prefixes, Templates & SEO Configuration
   ecommerceEnabled?: boolean;
+  ecommercePrefix?: EcommerceUrlPrefix;
+  ecommerceTemplateId?: EcommerceTemplateId;
   customDomain?: string;
   domainVerified?: boolean;
   dnsToken?: string;
@@ -289,6 +423,9 @@ export interface BusinessEntity {
   deliveryFee?: number;
   freeDeliveryAbove?: number;
   storefrontPickupEnabled?: boolean;
+  seoConfig?: StorefrontSeoConfig;
+  commsConfig?: TenantCommsConfig;
+  tenantSettings?: TenantSettings;
   installedModuleIds: string[];
   posConfig: PosCustomizationConfig;
   hardwareConfig?: PosHardwareConfig;
@@ -569,13 +706,14 @@ export interface ErpRecord {
   ownerId?: string;
   moduleId: string;
   businessId: string;
+  serviceId?: string;
   title: string;
   subtitle: string;
   status: string;
   amount?: number;
   currency?: string;
   date: string;
-  meta: Record<string, string | number>;
+  meta: Record<string, string | number | boolean>;
 }
 
 export interface AppModuleMeta {
@@ -614,6 +752,9 @@ export interface AppModuleMeta {
     | 'api'
     | 'timeline'
     | 'payments'
+    | 'marketing'
+    | 'settings'
+    | 'database_service'
     | 'portal';
   kenyaHighlight?: string;
 }

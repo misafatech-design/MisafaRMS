@@ -73,8 +73,10 @@ service cloud.firestore {
           'subscriptionPlan', 'subscriptionStatus', 'monthlyFee', 'branchLimit', 'subscriptionRenewsAt',
           'ecommerceEnabled', 'customDomain', 'domainVerified', 'dnsToken', 'storefrontTagline',
           'deliveryFee', 'freeDeliveryAbove', 'storefrontPickupEnabled',
+          'ecommercePrefix', 'ecommerceTemplateId', 'seoConfig', 'commsConfig', 'tenantSettings',
           'installedModuleIds', 'posConfig', 'paymentGateways', 'layoutConfig',
-          'catalogTaxonomy', 'offers', 'templateId', 'supportAccess', 'hardwareConfig',
+          'catalogTaxonomy', 'offers', 'templateId', 'serviceCode', 'systemCategory',
+          'customSystemLabel', 'parentGroupName', 'supportAccess', 'hardwareConfig',
           'createdAt', 'updatedAt'
         ]) &&
         isValidId(data.id) &&
@@ -104,6 +106,11 @@ service cloud.firestore {
         (!('deliveryFee' in data) || (data.deliveryFee is number && data.deliveryFee >= 0)) &&
         (!('freeDeliveryAbove' in data) || (data.freeDeliveryAbove is number && data.freeDeliveryAbove >= 0)) &&
         (!('storefrontPickupEnabled' in data) || data.storefrontPickupEnabled is bool) &&
+        (!('ecommercePrefix' in data) || data.ecommercePrefix in ['shop', 'store', 'market', 'order', 'menu', 'catalogue']) &&
+        (!('ecommerceTemplateId' in data) || data.ecommerceTemplateId in ['nairobi_minimal', 'farm_harvest', 'boutique_editorial', 'tech_grid', 'bistro_menu']) &&
+        (!('seoConfig' in data) || data.seoConfig is map) &&
+        (!('commsConfig' in data) || data.commsConfig is map) &&
+        (!('tenantSettings' in data) || data.tenantSettings is map) &&
         (!('installedModuleIds' in data) || (data.installedModuleIds is list && data.installedModuleIds.size() <= 80 && (data.installedModuleIds.size() == 0 || data.installedModuleIds[0] is string))) &&
         (!('posConfig' in data) || data.posConfig is map) &&
         (!('paymentGateways' in data) || data.paymentGateways is list) &&
@@ -111,6 +118,10 @@ service cloud.firestore {
         (!('catalogTaxonomy' in data) || (data.catalogTaxonomy is list && data.catalogTaxonomy.size() <= 100)) &&
         (!('offers' in data) || (data.offers is list && data.offers.size() <= 100)) &&
         (!('templateId' in data) || (data.templateId is string && data.templateId.size() <= 64)) &&
+        (!('serviceCode' in data) || (data.serviceCode is string && data.serviceCode.size() <= 40)) &&
+        (!('systemCategory' in data) || data.systemCategory in ['supermarket', 'restaurant', 'hardware', 'rentals', 'pharmacy', 'fashion', 'electronics', 'salon', 'wholesale', 'custom']) &&
+        (!('customSystemLabel' in data) || (data.customSystemLabel is string && data.customSystemLabel.size() <= 80)) &&
+        (!('parentGroupName' in data) || (data.parentGroupName is string && data.parentGroupName.size() <= 100)) &&
         (!('supportAccess' in data) || data.supportAccess is map) &&
         (!('hardwareConfig' in data) || data.hardwareConfig is map) &&
         data.createdAt is string && data.createdAt.size() <= 40 &&
@@ -263,10 +274,11 @@ service cloud.firestore {
 
     function isValidErpRecord(data) {
       return data.keys().hasAll(['id', 'ownerId', 'moduleId', 'title', 'status', 'date']) &&
-        data.keys().hasOnly(['id', 'ownerId', 'moduleId', 'businessId', 'title', 'subtitle', 'status', 'amount', 'currency', 'date', 'meta']) &&
+        data.keys().hasOnly(['id', 'ownerId', 'moduleId', 'businessId', 'serviceId', 'title', 'subtitle', 'status', 'amount', 'currency', 'date', 'meta']) &&
         isValidId(data.id) &&
         isValidId(data.ownerId) &&
         data.moduleId is string && data.moduleId.size() >= 1 && data.moduleId.size() <= 60 &&
+        (!('serviceId' in data) || (data.serviceId is string && data.serviceId.size() <= 128)) &&
         data.title is string && data.title.size() >= 1 && data.title.size() <= 140 &&
         data.status is string && data.status.size() >= 1 && data.status.size() <= 60 &&
         data.date is string && data.date.size() <= 30 &&
@@ -274,6 +286,30 @@ service cloud.firestore {
         (!('amount' in data) || data.amount is number) &&
         (!('currency' in data) || (data.currency is string && data.currency.size() <= 10)) &&
         (!('meta' in data) || data.meta is map);
+    }
+
+    function isValidDatabaseService(data) {
+      return data.keys().hasAll(['id', 'ownerId', 'businessId', 'serviceCode', 'displayName', 'slug', 'systemCategory', 'engineStatus', 'createdAt']) &&
+        data.keys().hasOnly([
+          'id', 'ownerId', 'businessId', 'serviceCode', 'displayName', 'slug',
+          'systemCategory', 'customSystemLabel', 'parentGroupName', 'templateId',
+          'engineStatus', 'region', 'planId', 'lastConnectedAt', 'createdAt'
+        ]) &&
+        isValidId(data.id) &&
+        isValidId(data.ownerId) &&
+        isValidId(data.businessId) &&
+        data.serviceCode is string && data.serviceCode.size() >= 2 && data.serviceCode.size() <= 40 &&
+        data.displayName is string && data.displayName.size() >= 1 && data.displayName.size() <= 120 &&
+        data.slug is string && data.slug.size() >= 2 && data.slug.size() <= 64 &&
+        data.systemCategory in ['supermarket', 'restaurant', 'hardware', 'rentals', 'pharmacy', 'fashion', 'electronics', 'salon', 'wholesale', 'custom'] &&
+        (!('customSystemLabel' in data) || (data.customSystemLabel is string && data.customSystemLabel.size() <= 80)) &&
+        (!('parentGroupName' in data) || (data.parentGroupName is string && data.parentGroupName.size() <= 100)) &&
+        (!('templateId' in data) || (data.templateId is string && data.templateId.size() <= 64)) &&
+        data.engineStatus in ['online', 'maintenance', 'suspended'] &&
+        (!('region' in data) || data.region in ['ke-nairobi-1', 'eu-west-2', 'af-south-1']) &&
+        (!('planId' in data) || data.planId in ['Trial', 'Starter', 'Multi-Store Pro', 'Enterprise']) &&
+        (!('lastConnectedAt' in data) || (data.lastConnectedAt is string && data.lastConnectedAt.size() <= 40)) &&
+        data.createdAt is string && data.createdAt.size() <= 40;
     }
 
     function isValidStoreBranch(data) {
@@ -434,6 +470,27 @@ service cloud.firestore {
       }
     }
 
+    // Multi-Service Database Instances (isolated vertical systems)
+    match /databaseServices/{serviceId} {
+      allow get: if isSignedIn() && isValidId(serviceId) && (existing().ownerId == request.auth.uid || isAdmin());
+      allow list: if isSignedIn() && (resource.data.ownerId == request.auth.uid || isAdmin());
+      allow create: if isVerifiedUser() &&
+        isValidId(serviceId) &&
+        isValidDatabaseService(incoming()) &&
+        incoming().ownerId == request.auth.uid;
+      allow update: if isVerifiedUser() &&
+        isValidId(serviceId) &&
+        isValidDatabaseService(incoming()) &&
+        incoming().id == existing().id &&
+        incoming().ownerId == existing().ownerId &&
+        incoming().createdAt == existing().createdAt &&
+        (
+          isAdmin() ||
+          (existing().ownerId == request.auth.uid && incoming().diff(existing()).affectedKeys().hasOnly(['displayName', 'customSystemLabel', 'parentGroupName', 'lastConnectedAt']))
+        );
+      allow delete: if isAdmin() && isValidId(serviceId);
+    }
+
     // Multi-tenant Businesses
     match /businesses/{businessId} {
       allow get: if isSignedIn() && isValidId(businessId) && (existing().ownerId == request.auth.uid || isAdmin());
@@ -450,7 +507,7 @@ service cloud.firestore {
         incoming().createdAt == existing().createdAt &&
         (
           isAdmin() ||
-          (existing().ownerId == request.auth.uid && incoming().diff(existing()).affectedKeys().hasOnly(['name', 'taxPin', 'vatRate', 'etimsEnabled', 'etimsMode', 'paybillOrTill', 'ecommerceEnabled', 'customDomain', 'domainVerified', 'dnsToken', 'storefrontTagline', 'deliveryFee', 'freeDeliveryAbove', 'storefrontPickupEnabled', 'installedModuleIds', 'posConfig', 'paymentGateways', 'layoutConfig', 'catalogTaxonomy', 'offers', 'templateId', 'supportAccess', 'hardwareConfig', 'updatedAt']))
+          (existing().ownerId == request.auth.uid && incoming().diff(existing()).affectedKeys().hasOnly(['name', 'country', 'currency', 'taxPin', 'vatRate', 'etimsEnabled', 'etimsMode', 'paybillOrTill', 'ecommerceEnabled', 'customDomain', 'domainVerified', 'dnsToken', 'storefrontTagline', 'deliveryFee', 'freeDeliveryAbove', 'storefrontPickupEnabled', 'ecommercePrefix', 'ecommerceTemplateId', 'seoConfig', 'commsConfig', 'tenantSettings', 'installedModuleIds', 'posConfig', 'paymentGateways', 'layoutConfig', 'catalogTaxonomy', 'offers', 'templateId', 'systemCategory', 'customSystemLabel', 'parentGroupName', 'supportAccess', 'hardwareConfig', 'updatedAt']))
         );
       allow delete: if isAdmin() && isValidId(businessId);
 

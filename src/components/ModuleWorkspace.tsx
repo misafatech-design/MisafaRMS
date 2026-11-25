@@ -3,9 +3,11 @@ import {
   ArrowLeftRight,
   CheckCircle2,
   Clock,
+  Download,
   Edit3,
   Eye,
   EyeOff,
+  FileSpreadsheet,
   KeyRound,
   LogIn,
   LogOut,
@@ -15,9 +17,11 @@ import {
   Plus,
   Printer,
   RefreshCw,
+  Search,
   Shield,
   Star,
   Trash2,
+  Upload,
   Users,
   X,
 } from 'lucide-react';
@@ -45,6 +49,7 @@ import {
 } from '../utils/cryptoSync';
 import { APP_MODULES } from '../data/modulesRegistry';
 import { getDefaultModulesForRole } from '../data/businessTemplates';
+import { MODULE_BLUEPRINTS, ModuleBlueprint } from '../data/moduleBlueprints';
 
 interface ModuleWorkspaceProps {
   module: AppModuleMeta;
@@ -137,7 +142,206 @@ interface ModuleWorkspaceProps {
     subtitle: string;
     status: string;
     amount?: number;
+    meta?: Record<string, string | number | boolean>;
   }) => Promise<void>;
+  onUpdateRecord?: (
+    recordId: string,
+    patch: {
+      status?: string;
+      title?: string;
+      subtitle?: string;
+      amount?: number;
+      meta?: Record<string, string | number | boolean>;
+    }
+  ) => Promise<void>;
+  onDeleteRecord?: (recordId: string) => Promise<void>;
+  onBulkImportProducts?: (payload: {
+    storeId: string;
+    upsertExisting: boolean;
+    rows: Array<{
+      sku?: string;
+      barcode?: string;
+      name: string;
+      category?: string;
+      subCategory?: string;
+      shelfCode?: string;
+      price: number;
+      cost?: number;
+      taxCode?: string;
+      unit?: string;
+      reorderPoint?: number;
+      qty?: number;
+    }>;
+  }) => Promise<{ createdCount: number; updatedCount: number; skippedCount: number; errors: string[] }>;
+}
+
+const MODULE_WORKFLOW_HINTS: Record<
+  string,
+  { titlePlaceholder: string; subtitlePlaceholder: string; statuses: string[]; sampleTitle: string }
+> = {
+  manufacturing: {
+    titlePlaceholder: 'Work Order / BoM Batch (e.g. WO-402 · Packaged Spice Blend)',
+    subtitlePlaceholder: 'Raw materials, BoM ratio, & assembly line',
+    statuses: ['Planned', 'In Production', 'QC Passed', 'Completed'],
+    sampleTitle: 'WO-2026-01 · 500x Packaged Kenya AA Ground Coffee',
+  },
+  expenses: {
+    titlePlaceholder: 'Expense Claim (e.g. Fuel & Rider Logistics — Westlands)',
+    subtitlePlaceholder: 'Receipt Ref, Staff Member & Cost Center',
+    statuses: ['Submitted', 'Pending Review', 'Approved', 'Reimbursed'],
+    sampleTitle: 'EXP-104 · Delivery Rider Fuel & Airtime',
+  },
+  approvals: {
+    titlePlaceholder: 'Approval Request (e.g. PO-882 Capital Equipment)',
+    subtitlePlaceholder: 'Requested By, Department & Threshold Policy',
+    statuses: ['Pending Review', 'Approved', 'Rejected', 'Completed'],
+    sampleTitle: 'APR-309 · Branch Generator Maintenance Budget',
+  },
+  quality: {
+    titlePlaceholder: 'KEBS / QC Inspection Lot (e.g. QC-BATCH-89)',
+    subtitlePlaceholder: 'Batch #, Inspector, Pass/Fail Tolerance Notes',
+    statuses: ['Pending Review', 'Passed QC', 'Quarantined', 'Completed'],
+    sampleTitle: 'QC-118 · Batch Moisture & Seal Integrity Check',
+  },
+  helpdesk: {
+    titlePlaceholder: 'Support Ticket (e.g. TKT-221 · eTIMS Device Sync Issue)',
+    subtitlePlaceholder: 'Customer / Branch, Priority & SLA Target',
+    statuses: ['Open', 'In Progress', 'Resolved', 'Closed'],
+    sampleTitle: 'TKT-409 · Delivery Order Delayed in Transit',
+  },
+  maintenance: {
+    titlePlaceholder: 'Equipment Service (e.g. Cold Room Compressor PM-04)',
+    subtitlePlaceholder: 'Asset Serial, Technician & Next Service Due',
+    statuses: ['Scheduled', 'In Progress', 'Completed'],
+    sampleTitle: 'MNT-204 · POS Thermal Printer & UPS Calibration',
+  },
+  repairs: {
+    titlePlaceholder: 'RMA / Repair Job (e.g. RMA-71 · Customer Device Repair)',
+    subtitlePlaceholder: 'Warranty Status, Parts Used & Diagnosis',
+    statuses: ['Diagnosing', 'Awaiting Parts', 'Repaired', 'Delivered'],
+    sampleTitle: 'RMA-552 · Warranty Replacement & Screen Calibration',
+  },
+  time_off: {
+    titlePlaceholder: 'Leave Request (e.g. Annual Leave — 5 Days)',
+    subtitlePlaceholder: 'Employee Name, Dates & Relief Officer',
+    statuses: ['Pending Review', 'Approved', 'Declined'],
+    sampleTitle: 'LV-088 · Grace Wanjiku (3 Days Compassionate Leave)',
+  },
+  subscriptions: {
+    titlePlaceholder: 'Recurring Plan (e.g. B2B Monthly Coffee Retainer)',
+    subtitlePlaceholder: 'Subscriber, Billing Cycle & Renewal Date',
+    statuses: ['Active', 'Trial', 'Paused', 'Cancelled'],
+    sampleTitle: 'SUB-112 · Corporate Office Weekly Pantry Supply',
+  },
+  rental: {
+    titlePlaceholder: 'Rental Contract (e.g. Event PA & Tent Hire — Weekend)',
+    subtitlePlaceholder: 'Lessee, Deposit Paid & Return Due Date',
+    statuses: ['Reserved', 'Checked Out', 'Returned', 'Completed'],
+    sampleTitle: 'RNT-094 · Commercial Cold Box 3-Day Lease',
+  },
+  fleet: {
+    titlePlaceholder: 'Vehicle Log (e.g. KDM 441Y — Isuzu NQR Route Run)',
+    subtitlePlaceholder: 'Driver, Odometer km, Fuel Liters & Service',
+    statuses: ['On Route', 'Available', 'Maintenance'],
+    sampleTitle: 'FLT-KDM441Y · 45L Diesel Refill & Westlands Dispatch',
+  },
+  restaurant: {
+    titlePlaceholder: 'Kitchen / Prep Ticket (e.g. KOT-204 · Table T4 Grill)',
+    subtitlePlaceholder: 'Course Notes, Waiter & Prep Station',
+    statuses: ['Queued', 'Preparing', 'Ready to Serve', 'Served'],
+    sampleTitle: 'KOT-119 · Table 4 (2x Nyama Platter, 2x Fresh Mango)',
+  },
+  purchase: {
+    titlePlaceholder: 'Purchase Order (e.g. PO-901 · Brookside Dairy Restock)',
+    subtitlePlaceholder: 'Supplier Name, Expected Delivery & Terms',
+    statuses: ['Ordered', 'Pending Review', 'Received (GRN)'],
+    sampleTitle: 'PO-410 · Bulk Beverage & Grocery Restock',
+  },
+};
+
+function splitDelimitedLine(line: string, delimiter: string): string[] {
+  const result: string[] = [];
+  let cur = '';
+  let inQuotes = false;
+  for (let i = 0; i < line.length; i += 1) {
+    const ch = line[i];
+    if (ch === '"') {
+      if (inQuotes && line[i + 1] === '"') {
+        cur += '"';
+        i += 1;
+      } else {
+        inQuotes = !inQuotes;
+      }
+    } else if (ch === delimiter && !inQuotes) {
+      result.push(cur.trim());
+      cur = '';
+    } else {
+      cur += ch;
+    }
+  }
+  result.push(cur.trim());
+  return result;
+}
+
+function parseInventoryCsvText(rawText: string) {
+  const lines = rawText
+    .split(/\r?\n/)
+    .map((l) => l.trim())
+    .filter(Boolean);
+  if (lines.length === 0) return [];
+  const firstLine = lines[0];
+  const delimiter = firstLine.includes('\t') ? '\t' : ',';
+  const headerCells = splitDelimitedLine(firstLine, delimiter).map((h) =>
+    h.toLowerCase().replace(/[^a-z0-9]/g, '')
+  );
+  const looksLikeHeader =
+    headerCells.includes('name') ||
+    headerCells.includes('productname') ||
+    headerCells.includes('sku') ||
+    headerCells.includes('price');
+
+  const dataLines = looksLikeHeader ? lines.slice(1) : lines;
+  const colIdx = (aliases: string[], fallback: number) => {
+    if (!looksLikeHeader) return fallback;
+    const found = headerCells.findIndex((h) => aliases.includes(h));
+    return found >= 0 ? found : -1;
+  };
+
+  const skuIdx = colIdx(['sku', 'itemcode', 'code'], 0);
+  const nameIdx = colIdx(['name', 'productname', 'title', 'item'], 1);
+  const catIdx = colIdx(['category', 'cat'], 2);
+  const subCatIdx = colIdx(['subcategory', 'subcat', 'sub'], 3);
+  const shelfIdx = colIdx(['shelf', 'shelfcode', 'location', 'section'], 4);
+  const priceIdx = colIdx(['price', 'sellprice', 'sellingprice', 'unitprice'], 5);
+  const costIdx = colIdx(['cost', 'unitcost', 'buyingprice'], 6);
+  const taxIdx = colIdx(['tax', 'taxcode', 'kratype'], 7);
+  const unitIdx = colIdx(['unit', 'uom'], 8);
+  const reorderIdx = colIdx(['reorder', 'reorderpoint', 'minstock'], 9);
+  const qtyIdx = colIdx(['qty', 'stock', 'quantity', 'initialqty'], 10);
+  const barcodeIdx = colIdx(['barcode', 'ean'], 11);
+
+  return dataLines.map((line) => {
+    const cells = splitDelimitedLine(line, delimiter);
+    const val = (idx: number) => (idx >= 0 && idx < cells.length ? cells[idx] : '');
+    const priceNum = Number(val(priceIdx).replace(/[^0-9.]/g, '')) || 0;
+    const costNum = Number(val(costIdx).replace(/[^0-9.]/g, ''));
+    const qtyNum = Number(val(qtyIdx).replace(/[^0-9.]/g, ''));
+    const reorderNum = Number(val(reorderIdx).replace(/[^0-9.]/g, ''));
+    return {
+      sku: val(skuIdx),
+      name: val(nameIdx),
+      category: val(catIdx) || 'General',
+      subCategory: val(subCatIdx) || undefined,
+      shelfCode: val(shelfIdx) || undefined,
+      price: priceNum,
+      cost: Number.isFinite(costNum) && val(costIdx) !== '' ? costNum : undefined,
+      taxCode: val(taxIdx) || 'B_16',
+      unit: val(unitIdx) || 'Unit',
+      reorderPoint: Number.isFinite(reorderNum) && val(reorderIdx) !== '' ? reorderNum : 10,
+      qty: Number.isFinite(qtyNum) && val(qtyIdx) !== '' ? qtyNum : 0,
+      barcode: val(barcodeIdx) || undefined,
+    };
+  });
 }
 
 const DEFAULT_EMP_PERMS: Record<UserRole, EmployeePermissionSet> = {
@@ -244,6 +448,9 @@ export const ModuleWorkspace: React.FC<ModuleWorkspaceProps> = ({
   onSlotStatusChange,
   onReceivePurchaseOrder,
   onCreateRecord,
+  onUpdateRecord,
+  onDeleteRecord,
+  onBulkImportProducts,
 }) => {
   const perms = ROLE_PERMISSIONS[activeRole];
 
@@ -329,13 +536,23 @@ export const ModuleWorkspace: React.FC<ModuleWorkspaceProps> = ({
   const [receivingId, setReceivingId] = useState<string | null>(null);
   const [grnFeedback, setGrnFeedback] = useState('');
 
-  // Generic ERP record creation state
+  // Generic ERP record creation & workflow state
   const [recTitle, setRecTitle] = useState('');
   const [recSubtitle, setRecSubtitle] = useState('');
   const [recStatus, setRecStatus] = useState('Active');
   const [recAmount, setRecAmount] = useState('');
+  const [recMeta, setRecMeta] = useState<Record<string, string | number>>({});
+  const [recSearch, setRecSearch] = useState('');
+  const [recFilterStatus, setRecFilterStatus] = useState('All');
   const [hrSyncing, setHrSyncing] = useState(false);
   const [hrSyncedMsg, setHrSyncedMsg] = useState('');
+
+  // Bulk inventory import/export state
+  const [bulkImportOpen, setBulkImportOpen] = useState(false);
+  const [bulkCsvText, setBulkCsvText] = useState('');
+  const [bulkUpsert, setBulkUpsert] = useState(true);
+  const [bulkImporting, setBulkImporting] = useState(false);
+  const [bulkSummary, setBulkSummary] = useState('');
 
   const moduleRecords = useMemo(
     () => records.filter((r) => r.moduleId === module.id && r.businessId === business.id),
@@ -419,15 +636,158 @@ export const ModuleWorkspace: React.FC<ModuleWorkspaceProps> = ({
       }
     };
 
+    const parsedBulkRows = useMemo(
+      () => parseInventoryCsvText(bulkCsvText),
+      [bulkCsvText]
+    );
+
+    const csvEscape = (v: unknown) => {
+      const s = String(v ?? '');
+      return s.includes(',') || s.includes('"') || s.includes('\n')
+        ? `"${s.replace(/"/g, '""')}"`
+        : s;
+    };
+
+    const handleExportInventoryCsv = () => {
+      const headers = [
+        'SKU',
+        'Name',
+        'Category',
+        'SubCategory',
+        'ShelfCode',
+        'Price',
+        'Cost',
+        'TaxCode',
+        'Unit',
+        'ReorderPoint',
+        'Qty',
+        'Barcode',
+        ...stores.map((s) => `Stock_${s.code}`),
+      ];
+      const lines = [headers.join(',')];
+      for (const p of products) {
+        lines.push(
+          [
+            p.sku,
+            p.name,
+            p.category,
+            p.subCategory || '',
+            p.shelfCode || '',
+            p.price,
+            p.cost,
+            p.taxCode,
+            p.unit,
+            p.reorderPoint,
+            p.stockByStore[activeStore.id] ?? 0,
+            p.barcode,
+            ...stores.map((s) => p.stockByStore[s.id] ?? 0),
+          ]
+            .map(csvEscape)
+            .join(',')
+        );
+      }
+      const blob = new Blob([lines.join('\n')], { type: 'text/csv;charset=utf-8;' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `${business.slug}-inventory-${activeStore.code.toLowerCase()}.csv`;
+      a.click();
+      URL.revokeObjectURL(url);
+    };
+
+    const handleDownloadCsvTemplate = () => {
+      const sampleRows = [
+        'SKU,Name,Category,SubCategory,ShelfCode,Price,Cost,TaxCode,Unit,ReorderPoint,Qty,Barcode',
+        'COF-101,Kenya AA Roast Beans 500g,Beverages,Coffee,A1 · Shelf Top,850,520,B_16,Pack,15,40,61611000101',
+        'OIL-202,Cold Pressed Sunflower Oil 2L,Pantry,Cooking Oils,B2 · Mid Shelf,690,480,E_0,Bottle,10,25,61611000202',
+      ].join('\n');
+      const blob = new Blob([sampleRows], { type: 'text/csv;charset=utf-8;' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = 'misafarms-inventory-import-template.csv';
+      a.click();
+      URL.revokeObjectURL(url);
+    };
+
+    const handleCsvFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+      const file = e.target.files?.[0];
+      if (!file) return;
+      const reader = new FileReader();
+      reader.onload = () => {
+        if (typeof reader.result === 'string') {
+          setBulkCsvText(reader.result);
+        }
+      };
+      reader.readAsText(file);
+    };
+
+    const handleSubmitBulkImport = async () => {
+      if (!onBulkImportProducts || parsedBulkRows.length === 0) return;
+      setBulkImporting(true);
+      setBulkSummary('');
+      try {
+        const res = await onBulkImportProducts({
+          storeId: activeStore.id,
+          upsertExisting: bulkUpsert,
+          rows: parsedBulkRows,
+        });
+        setBulkSummary(
+          `Imported cleanly: ${res.createdCount} created, ${res.updatedCount} updated, ${res.skippedCount} skipped.${
+            res.errors.length > 0 ? ` (${res.errors[0]})` : ''
+          }`
+        );
+        if (res.createdCount + res.updatedCount > 0) {
+          setBulkCsvText('');
+        }
+      } finally {
+        setBulkImporting(false);
+      }
+    };
+
     return (
       <div className="space-y-6">
-        <div>
-          <h1 className="font-display text-2xl font-bold text-slate-900 dark:text-slate-100">
-            Multi-Store Inventory, Shelves &amp; Product Catalog
-          </h1>
-          <p className="mt-1 text-sm text-slate-600 dark:text-slate-400">
-            Manage real branch stock levels, inline SKU pricing, quick +/- stock counts, and inter-store transfers for {business.name}.
-          </p>
+        <div className="flex flex-wrap items-end justify-between gap-3">
+          <div>
+            <h1 className="font-display text-2xl font-bold text-slate-900 dark:text-slate-100">
+              Multi-Store Inventory, Shelves &amp; Product Catalog
+            </h1>
+            <p className="mt-1 text-sm text-slate-600 dark:text-slate-400">
+              Manage real branch stock levels, bulk CSV/Excel import &amp; export, inline SKU pricing, and inter-store transfers for {business.name}.
+            </p>
+          </div>
+
+          <div className="flex flex-wrap items-center gap-2 text-xs">
+            <button
+              type="button"
+              onClick={handleExportInventoryCsv}
+              className="inline-flex items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-3 py-2 font-semibold text-slate-700 hover:bg-slate-50 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200 dark:hover:bg-slate-800"
+            >
+              <Download className="h-3.5 w-3.5 text-teal-700 dark:text-teal-400" />
+              <span>Export Inventory CSV</span>
+            </button>
+            <button
+              type="button"
+              onClick={handleDownloadCsvTemplate}
+              className="inline-flex items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-3 py-2 font-semibold text-slate-700 hover:bg-slate-50 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200 dark:hover:bg-slate-800"
+            >
+              <FileSpreadsheet className="h-3.5 w-3.5 text-teal-700 dark:text-teal-400" />
+              <span>CSV Template</span>
+            </button>
+            {perms.canEditInventory && onBulkImportProducts && (
+              <button
+                type="button"
+                onClick={() => {
+                  setBulkSummary('');
+                  setBulkImportOpen(true);
+                }}
+                className="inline-flex items-center gap-1.5 rounded-lg bg-slate-900 px-3.5 py-2 font-semibold text-white hover:bg-slate-800 dark:bg-teal-600"
+              >
+                <Upload className="h-3.5 w-3.5" />
+                <span>Bulk Import CSV / Excel</span>
+              </button>
+            )}
+          </div>
         </div>
 
         <div className="grid grid-cols-1 gap-5 lg:grid-cols-12">
@@ -942,6 +1302,121 @@ export const ModuleWorkspace: React.FC<ModuleWorkspaceProps> = ({
                   </button>
                 </div>
               </form>
+            </div>
+          </div>
+        )}
+
+        {/* Bulk Inventory Import Modal */}
+        {bulkImportOpen && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/60 p-4 backdrop-blur-xs">
+            <div className="w-full max-w-2xl space-y-4 rounded-xl border border-slate-200 bg-white p-6 shadow-xl dark:border-slate-800 dark:bg-slate-900">
+              <div className="flex items-center justify-between border-b border-slate-200 pb-3 dark:border-slate-800">
+                <div>
+                  <h3 className="font-display text-base font-bold text-slate-900 dark:text-slate-100">
+                    Bulk Import Products into {activeStore.name}
+                  </h3>
+                  <p className="text-xs text-slate-500 dark:text-slate-400">
+                    Upload a .csv file or paste rows directly from Excel / Google Sheets (SKU, Name, Category, SubCategory, Shelf, Price, Cost, TaxCode, Unit, ReorderPoint, Qty, Barcode).
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setBulkImportOpen(false)}
+                  className="rounded p-1 text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800"
+                >
+                  <X className="h-4 w-4" />
+                </button>
+              </div>
+
+              <div className="flex flex-wrap items-center justify-between gap-2 text-xs">
+                <label className="inline-flex cursor-pointer items-center gap-2 rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 font-semibold text-slate-700 hover:bg-slate-100 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-200">
+                  <Upload className="h-3.5 w-3.5 text-teal-700 dark:text-teal-400" />
+                  <span>Choose .CSV File</span>
+                  <input
+                    type="file"
+                    accept=".csv,text/csv,text/plain"
+                    onChange={handleCsvFileUpload}
+                    className="hidden"
+                  />
+                </label>
+
+                <label className="inline-flex items-center gap-2 text-slate-700 dark:text-slate-300">
+                  <input
+                    type="checkbox"
+                    checked={bulkUpsert}
+                    onChange={(e) => setBulkUpsert(e.target.checked)}
+                    className="rounded border-slate-300 text-teal-700"
+                  />
+                  <span>Update price, cost &amp; stock when SKU already exists</span>
+                </label>
+              </div>
+
+              <textarea
+                rows={6}
+                value={bulkCsvText}
+                onChange={(e) => setBulkCsvText(e.target.value)}
+                placeholder={`SKU,Name,Category,SubCategory,ShelfCode,Price,Cost,TaxCode,Unit,ReorderPoint,Qty,Barcode\nMILK-500,Fresh Milk 500ml,Dairy,Milk,Fridge 1,65,48,E_0,Pack,20,60,6161100500`}
+                className="w-full rounded-lg border border-slate-200 bg-slate-50 p-3 font-mono text-[11px] text-slate-900 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-100"
+              />
+
+              {parsedBulkRows.length > 0 && (
+                <div className="max-h-40 overflow-auto rounded-lg border border-slate-200 dark:border-slate-800">
+                  <table className="w-full text-left font-mono text-[11px]">
+                    <thead className="bg-slate-50 text-slate-500 dark:bg-slate-800">
+                      <tr>
+                        <th className="px-2.5 py-1.5">SKU</th>
+                        <th className="px-2.5 py-1.5">Name</th>
+                        <th className="px-2.5 py-1.5">Category</th>
+                        <th className="px-2.5 py-1.5 text-right">Price</th>
+                        <th className="px-2.5 py-1.5 text-right">Qty</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
+                      {parsedBulkRows.slice(0, 8).map((row, idx) => (
+                        <tr key={`${row.sku}-${idx}`}>
+                          <td className="px-2.5 py-1">{row.sku || 'AUTO'}</td>
+                          <td className="px-2.5 py-1 font-sans font-medium">{row.name || '—'}</td>
+                          <td className="px-2.5 py-1 font-sans">{row.category}</td>
+                          <td className="px-2.5 py-1 text-right">{row.price}</td>
+                          <td className="px-2.5 py-1 text-right">{row.qty}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+
+              {bulkSummary && (
+                <div className="flex items-center gap-2 rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-2 text-xs font-medium text-emerald-800 dark:border-emerald-900 dark:bg-emerald-950/40 dark:text-emerald-300">
+                  <CheckCircle2 className="h-4 w-4 shrink-0" />
+                  <span>{bulkSummary}</span>
+                </div>
+              )}
+
+              <div className="flex items-center justify-between pt-1 text-xs">
+                <span className="font-mono text-slate-500">
+                  {parsedBulkRows.length} row(s) parsed (up to 500 per batch)
+                </span>
+                <div className="flex gap-2">
+                  <button
+                    type="button"
+                    onClick={() => setBulkImportOpen(false)}
+                    className="rounded-lg border border-slate-200 px-4 py-2 font-medium text-slate-700 dark:border-slate-700 dark:text-slate-200"
+                  >
+                    Close
+                  </button>
+                  <button
+                    type="button"
+                    disabled={bulkImporting || parsedBulkRows.length === 0}
+                    onClick={handleSubmitBulkImport}
+                    className="rounded-lg bg-teal-700 px-4 py-2 font-semibold text-white hover:bg-teal-800 disabled:opacity-40"
+                  >
+                    {bulkImporting
+                      ? 'Importing SKUs...'
+                      : `Import ${parsedBulkRows.length} SKU(s)`}
+                  </button>
+                </div>
+              </div>
             </div>
           </div>
         )}
@@ -2093,20 +2568,85 @@ export const ModuleWorkspace: React.FC<ModuleWorkspaceProps> = ({
     );
   }
 
-  // Generic Interactive ERP Workspace (Covers all remaining Odoo & Dynamics modules cleanly, including Purchase GRN & Portal User view)
+  // Domain-Powered ERP Workspace (All 29 operational modules with structured metadata, auto-calculators, live boards, CSV & print)
+  const bp: ModuleBlueprint | undefined = MODULE_BLUEPRINTS[module.id];
+  const hint = MODULE_WORKFLOW_HINTS[module.id];
+  const workflowStatuses = bp?.statuses || hint?.statuses || ['Active', 'Pending Review', 'Approved', 'Completed'];
+
+  const computeAutoAmount = (
+    blueprint: ModuleBlueprint | undefined,
+    nextMeta: Record<string, string | number>
+  ): string | null => {
+    if (!blueprint?.autoCompute) return null;
+    if (blueprint.autoCompute === 'rental_total') {
+      const days = Number(nextMeta.rentalDays) || 0;
+      const rate = Number(nextMeta.dailyRate) || 0;
+      return days > 0 && rate > 0 ? String(Math.round(days * rate * 100) / 100) : null;
+    }
+    if (blueprint.autoCompute === 'qty_unit_cost') {
+      const qty = Number(nextMeta.qty) || 0;
+      const cost = Number(nextMeta.unitCost) || 0;
+      return qty > 0 && cost > 0 ? String(Math.round(qty * cost * 100) / 100) : null;
+    }
+    if (blueprint.autoCompute === 'hours_rate') {
+      const hours = Number(nextMeta.hours) || 0;
+      const rate = Number(nextMeta.hourlyRate) || 0;
+      return hours > 0 && rate > 0 ? String(Math.round(hours * rate * 100) / 100) : null;
+    }
+    if (blueprint.autoCompute === 'parts_plus_labor') {
+      const parts = Number(nextMeta.partsCost) || 0;
+      const labor = Number(nextMeta.laborFee) || 0;
+      return parts + labor > 0 ? String(Math.round((parts + labor) * 100) / 100) : null;
+    }
+    if (blueprint.autoCompute === 'monthly_x_months') {
+      const fee = Number(nextMeta.monthlyFee) || 0;
+      const months = Number(nextMeta.monthsCount) || 0;
+      return fee > 0 && months > 0 ? String(Math.round(fee * months * 100) / 100) : null;
+    }
+    return null;
+  };
+
+  const handleMetaFieldChange = (key: string, value: string | number) => {
+    const nextMeta = { ...recMeta, [key]: value };
+    setRecMeta(nextMeta);
+    const computed = computeAutoAmount(bp, nextMeta);
+    if (computed !== null) setRecAmount(computed);
+  };
+
+  const handleApplyBlueprintPreset = (presetIdx: number) => {
+    const preset = bp?.templates[presetIdx];
+    if (!preset) return;
+    setRecTitle(preset.title);
+    setRecSubtitle(preset.subtitle);
+    setRecStatus(preset.status || workflowStatuses[0]);
+    setRecMeta({ ...preset.meta });
+    if (preset.amount !== undefined) {
+      setRecAmount(String(preset.amount));
+    }
+  };
+
   const handleCreate = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!recTitle.trim()) return;
+    const cleanedMeta: Record<string, string | number | boolean> = {};
+    for (const [k, v] of Object.entries(recMeta)) {
+      if (v !== '' && v !== undefined && v !== null) {
+        cleanedMeta[k] = v;
+      }
+    }
+    const chosenStatus = workflowStatuses.includes(recStatus) ? recStatus : workflowStatuses[0];
     await onCreateRecord({
       moduleId: module.id,
       title: recTitle.trim(),
       subtitle: recSubtitle.trim() || `${module.name} entry · ${activeStore.name}`,
-      status: accountTier === 'user' ? 'Submitted by Customer' : recStatus,
+      status: accountTier === 'user' ? 'Submitted by Customer' : chosenStatus,
       amount: recAmount ? Number(recAmount) : undefined,
+      meta: cleanedMeta,
     });
     setRecTitle('');
     setRecSubtitle('');
     setRecAmount('');
+    setRecMeta({});
   };
 
   const handleReceiveGrn = async (recordId: string) => {
@@ -2121,6 +2661,58 @@ export const ModuleWorkspace: React.FC<ModuleWorkspaceProps> = ({
     }
   };
 
+  const distinctStatuses = Array.from(
+    new Set(['All', ...workflowStatuses, ...moduleRecords.map((r) => r.status)])
+  );
+  const filteredModuleRecords = moduleRecords.filter((r) => {
+    const statusOk = recFilterStatus === 'All' || r.status === recFilterStatus;
+    if (!statusOk) return false;
+    const q = recSearch.trim().toLowerCase();
+    if (!q) return true;
+    const metaStr = Object.values(r.meta || {}).join(' ').toLowerCase();
+    return (
+      r.title.toLowerCase().includes(q) ||
+      r.subtitle.toLowerCase().includes(q) ||
+      r.status.toLowerCase().includes(q) ||
+      metaStr.includes(q)
+    );
+  });
+  const totalRecordValue = moduleRecords.reduce((s, r) => s + (r.amount || 0), 0);
+  const completedCount = moduleRecords.filter((r) =>
+    /complete|approved|received|closed|resolved|served|passed|reimbursed|returned|verified|signed|registered|published|certified|hired|delivered/i.test(
+      r.status
+    )
+  ).length;
+
+  const handleExportModuleCsv = () => {
+    const headers = ['ID', 'Title', 'Subtitle', 'Status', 'Amount', 'Currency', 'Date', 'Details'];
+    const escape = (v: unknown) => `"${String(v ?? '').replace(/"/g, '""')}"`;
+    const rows = filteredModuleRecords.map((r) =>
+      [
+        r.id,
+        r.title,
+        r.subtitle,
+        r.status,
+        r.amount ?? 0,
+        r.currency || business.currency,
+        r.date,
+        Object.entries(r.meta || {})
+          .map(([k, v]) => `${k}=${v}`)
+          .join('; '),
+      ]
+        .map(escape)
+        .join(',')
+    );
+    const csv = [headers.join(','), ...rows].join('\n');
+    const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `${business.slug}-${module.id}-ledger.csv`;
+    a.click();
+    URL.revokeObjectURL(url);
+  };
+
   return (
     <div className="space-y-6">
       <div className="flex flex-wrap items-end justify-between gap-3">
@@ -2133,12 +2725,244 @@ export const ModuleWorkspace: React.FC<ModuleWorkspaceProps> = ({
           </p>
         </div>
 
-        {accountTier === 'user' && (
-          <span className="font-mono text-xs text-teal-700 dark:text-teal-400">
-            Customer Portal · https://misafarms.com/{business.slug}
-          </span>
-        )}
+        <div className="flex flex-wrap items-center gap-2">
+          {accountTier !== 'user' && bp && bp.templates.length > 0 && (
+            bp.templates.map((tpl, idx) => (
+              <button
+                key={tpl.label}
+                type="button"
+                onClick={() => handleApplyBlueprintPreset(idx)}
+                className="rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-50 whitespace-nowrap dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200"
+              >
+                Template: {tpl.label}
+              </button>
+            ))
+          )}
+          {!bp && hint?.sampleTitle && accountTier !== 'user' && (
+            <button
+              type="button"
+              onClick={() => {
+                setRecTitle(hint.sampleTitle);
+                setRecSubtitle(`${module.name} · ${activeStore.name}`);
+                setRecStatus(workflowStatuses[0]);
+              }}
+              className="rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-50 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200"
+            >
+              Use Quick Template
+            </button>
+          )}
+          <button
+            type="button"
+            onClick={handleExportModuleCsv}
+            className="inline-flex items-center gap-1 rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-50 whitespace-nowrap dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200"
+          >
+            <Download className="h-3.5 w-3.5" />
+            <span>CSV</span>
+          </button>
+          <button
+            type="button"
+            onClick={() => window.print()}
+            className="inline-flex items-center gap-1 rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-50 whitespace-nowrap dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200"
+          >
+            <Printer className="h-3.5 w-3.5" />
+            <span>Print</span>
+          </button>
+          {accountTier === 'user' && (
+            <span className="font-mono text-xs text-teal-700 dark:text-teal-400">
+              Customer Portal · https://misafarms.com/{business.slug}
+            </span>
+          )}
+        </div>
       </div>
+
+      {/* Live Module KPI Strip */}
+      <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+        <div className="rounded-xl border border-slate-200 bg-white p-4 dark:border-slate-800 dark:bg-slate-900">
+          <p className="text-[11px] font-medium text-slate-500 dark:text-slate-400">Total Records</p>
+          <p className="mt-1 font-mono text-xl font-bold tabular-nums text-slate-900 dark:text-slate-100">
+            {moduleRecords.length}
+          </p>
+        </div>
+        <div className="rounded-xl border border-slate-200 bg-white p-4 dark:border-slate-800 dark:bg-slate-900">
+          <p className="text-[11px] font-medium text-slate-500 dark:text-slate-400">Open / Active</p>
+          <p className="mt-1 font-mono text-xl font-bold tabular-nums text-amber-700 dark:text-amber-400">
+            {Math.max(0, moduleRecords.length - completedCount)}
+          </p>
+        </div>
+        <div className="rounded-xl border border-slate-200 bg-white p-4 dark:border-slate-800 dark:bg-slate-900">
+          <p className="text-[11px] font-medium text-slate-500 dark:text-slate-400">
+            Completed / Settled
+          </p>
+          <p className="mt-1 font-mono text-xl font-bold tabular-nums text-emerald-700 dark:text-emerald-400">
+            {completedCount}
+          </p>
+        </div>
+        <div className="rounded-xl border border-slate-200 bg-white p-4 dark:border-slate-800 dark:bg-slate-900">
+          <p className="text-[11px] font-medium text-slate-500 dark:text-slate-400">
+            {bp?.summaryMetricLabel || 'Total Tracked Value'}
+          </p>
+          <p className="mt-1 font-mono text-lg font-bold tabular-nums text-slate-900 dark:text-slate-100">
+            {['knowledge', 'forum', 'elearning', 'blog'].includes(module.id)
+              ? totalRecordValue.toLocaleString()
+              : formatMoney(totalRecordValue, business.currency)}
+          </p>
+        </div>
+      </div>
+
+      {/* Embedded Live Operational Boards */}
+      {bp?.embeddedBoard === 'restaurant_floor' && accountTier !== 'user' && (
+        <section className="rounded-xl border border-slate-200 bg-white p-5 dark:border-slate-800 dark:bg-slate-900">
+          <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+            <div>
+              <h2 className="font-display text-sm font-bold text-slate-900 dark:text-slate-100">
+                Live Dining Floors, Tables &amp; Clearing Board
+              </h2>
+              <p className="text-xs text-slate-500 dark:text-slate-400">
+                Click any table state to seat guests, mark needs clearing, or reopen as available.
+              </p>
+            </div>
+          </div>
+          {layoutZones.length === 0 ? (
+            <p className="text-xs text-slate-500">
+              No dining floors or tables configured yet. Add floors in POS Settings.
+            </p>
+          ) : (
+            <div className="space-y-4">
+              {layoutZones.map((zone) => (
+                <div key={zone.id}>
+                  <p className="mb-2 text-xs font-semibold text-slate-700 dark:text-slate-300">
+                    {zone.name}
+                  </p>
+                  <div className="grid grid-cols-2 gap-2.5 sm:grid-cols-4 lg:grid-cols-6">
+                    {zone.slots.map((slot) => (
+                      <div
+                        key={slot.id}
+                        className="rounded-lg border border-slate-200 bg-slate-50 p-2.5 text-xs dark:border-slate-700 dark:bg-slate-800/70"
+                      >
+                        <div className="flex items-center justify-between font-mono font-bold">
+                          <span>{slot.code}</span>
+                          <span
+                            className={`text-[10px] uppercase ${
+                              slot.status === 'available'
+                                ? 'text-emerald-700 dark:text-emerald-400'
+                                : slot.status === 'occupied'
+                                  ? 'text-sky-700 dark:text-sky-400'
+                                  : 'text-amber-700 dark:text-amber-400'
+                            }`}
+                          >
+                            {slot.status.replace('_', ' ')}
+                          </span>
+                        </div>
+                        <p className="mt-0.5 truncate text-[11px] text-slate-600 dark:text-slate-300">
+                          {slot.label} · {slot.capacity} seats
+                        </p>
+                        <select
+                          aria-label={`Table status for ${slot.code}`}
+                          value={slot.status}
+                          onChange={(e) =>
+                            onSlotStatusChange(zone.id, slot.id, e.target.value as SlotStatus)
+                          }
+                          className="mt-2 w-full rounded border border-slate-200 bg-white px-1.5 py-1 text-[11px] dark:border-slate-700 dark:bg-slate-900"
+                        >
+                          <option value="available">Available / Clean</option>
+                          <option value="occupied">Occupied</option>
+                          <option value="needs_clearing">Needs Clearing</option>
+                          <option value="needs_restock">Needs Restock</option>
+                        </select>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </section>
+      )}
+
+      {bp?.embeddedBoard === 'attendance_board' && accountTier !== 'user' && (
+        <section className="rounded-xl border border-slate-200 bg-white p-5 dark:border-slate-800 dark:bg-slate-900">
+          <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+            <div>
+              <h2 className="font-display text-sm font-bold text-slate-900 dark:text-slate-100">
+                Live Staff Shift Clock-In &amp; Clock-Out Board
+              </h2>
+              <p className="text-xs text-slate-500 dark:text-slate-400">
+                Real-time employee shift status synced with POS registers and payroll attendance logs.
+              </p>
+            </div>
+          </div>
+          <div className="grid grid-cols-1 gap-2.5 sm:grid-cols-2 lg:grid-cols-3">
+            {employees.map((emp) => (
+              <div
+                key={emp.id}
+                className="flex items-center justify-between gap-3 rounded-lg border border-slate-200 bg-slate-50 p-3 text-xs dark:border-slate-700 dark:bg-slate-800/70"
+              >
+                <div className="min-w-0">
+                  <p className="truncate font-semibold text-slate-900 dark:text-slate-100">
+                    {emp.name}
+                  </p>
+                  <p className="text-[11px] text-slate-500 dark:text-slate-400">
+                    {emp.role} · {emp.clockedIn ? 'On Shift' : 'Off Shift'}
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  onClick={() =>
+                    onEmployeeAttendance(emp.id, emp.clockedIn ? 'clock_out' : 'clock_in')
+                  }
+                  className={`inline-flex items-center gap-1 rounded-lg px-2.5 py-1.5 text-[11px] font-semibold whitespace-nowrap shrink-0 ${
+                    emp.clockedIn
+                      ? 'border border-rose-200 bg-rose-50 text-rose-700 hover:bg-rose-100 dark:border-rose-900 dark:bg-rose-950/50 dark:text-rose-300'
+                      : 'bg-teal-700 text-white hover:bg-teal-800 dark:bg-teal-600'
+                  }`}
+                >
+                  {emp.clockedIn ? <LogOut className="h-3 w-3" /> : <LogIn className="h-3 w-3" />}
+                  <span>{emp.clockedIn ? 'Clock Out' : 'Clock In'}</span>
+                </button>
+              </div>
+            ))}
+          </div>
+        </section>
+      )}
+
+      {bp?.embeddedBoard === 'employee_performance' && accountTier !== 'user' && (
+        <section className="rounded-xl border border-slate-200 bg-white p-5 dark:border-slate-800 dark:bg-slate-900">
+          <div className="mb-3">
+            <h2 className="font-display text-sm font-bold text-slate-900 dark:text-slate-100">
+              Live Employee Ratings, Orders &amp; Tips Leaderboard
+            </h2>
+            <p className="text-xs text-slate-500 dark:text-slate-400">
+              Aggregated automatically from POS receipts, waiter assignments, and customer star ratings.
+            </p>
+          </div>
+          <div className="grid grid-cols-1 gap-2.5 sm:grid-cols-2 lg:grid-cols-3">
+            {employees.map((emp) => (
+              <div
+                key={emp.id}
+                className="flex items-center justify-between gap-2 rounded-lg border border-slate-200 bg-slate-50 p-3 text-xs dark:border-slate-700 dark:bg-slate-800/70"
+              >
+                <div className="min-w-0">
+                  <p className="truncate font-semibold text-slate-900 dark:text-slate-100">
+                    {emp.name}
+                  </p>
+                  <p className="text-[11px] text-slate-500 dark:text-slate-400">
+                    {emp.role} · {emp.ordersHandled ?? 0} orders
+                  </p>
+                </div>
+                <div className="text-right font-mono">
+                  <p className="inline-flex items-center gap-1 font-semibold text-amber-600 dark:text-amber-400">
+                    <Star className="h-3 w-3 fill-current" />
+                    <span>{(emp.ratingAvg ?? 5).toFixed(1)}</span>
+                  </p>
+                  <p className="text-[11px] text-emerald-700 dark:text-emerald-400">
+                    Tips: {formatMoney(emp.tipsEarned ?? 0, business.currency)}
+                  </p>
+                </div>
+              </div>
+            ))}
+          </div>
+        </section>
+      )}
 
       {grnFeedback && (
         <div className="flex items-center gap-2 rounded-lg border border-emerald-200 bg-emerald-50 px-4 py-2.5 text-xs font-medium text-emerald-800 dark:border-emerald-900 dark:bg-emerald-950/40 dark:text-emerald-300">
@@ -2147,118 +2971,326 @@ export const ModuleWorkspace: React.FC<ModuleWorkspaceProps> = ({
         </div>
       )}
 
-      {/* Add New Module Entry Form */}
+      {/* Structured Domain Entry Form */}
       <form
         onSubmit={handleCreate}
-        className="grid grid-cols-1 gap-3 rounded-xl border border-slate-200 bg-white p-5 sm:grid-cols-12 dark:border-slate-800 dark:bg-slate-900"
+        className="space-y-3 rounded-xl border border-slate-200 bg-white p-5 dark:border-slate-800 dark:bg-slate-900"
       >
-        <input
-          type="text"
-          required
-          value={recTitle}
-          onChange={(e) => setRecTitle(e.target.value)}
-          placeholder={
-            accountTier === 'user'
-              ? `Submit ${module.name} request or order...`
-              : `New ${module.name} title or reference...`
-          }
-          className="sm:col-span-4 rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-900 focus:border-teal-600 focus:bg-white focus:outline-none dark:border-slate-700 dark:bg-slate-800 dark:text-slate-100"
-        />
-        <input
-          type="text"
-          value={recSubtitle}
-          onChange={(e) => setRecSubtitle(e.target.value)}
-          placeholder="Notes, supplier, customer, or route details..."
-          className="sm:col-span-4 rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-900 focus:border-teal-600 focus:bg-white focus:outline-none dark:border-slate-700 dark:bg-slate-800 dark:text-slate-100"
-        />
-        <input
-          type="number"
-          value={recAmount}
-          onChange={(e) => setRecAmount(e.target.value)}
-          placeholder={`Value (${business.currency})`}
-          className="sm:col-span-2 rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 font-mono text-xs text-slate-900 focus:border-teal-600 focus:bg-white focus:outline-none dark:border-slate-700 dark:bg-slate-800 dark:text-slate-100"
-        />
-        <button
-          type="submit"
-          className="sm:col-span-2 inline-flex items-center justify-center gap-1.5 rounded-lg bg-teal-700 px-3 py-2 text-xs font-semibold text-white hover:bg-teal-800 dark:bg-teal-600"
-        >
-          <Plus className="h-3.5 w-3.5" />
-          <span>{accountTier === 'user' ? 'Submit' : 'Add Entry'}</span>
-        </button>
+        <div className="grid grid-cols-1 gap-3 sm:grid-cols-12">
+          <div className="sm:col-span-5">
+            <label className="mb-1 block text-[11px] font-medium text-slate-600 dark:text-slate-400">
+              {bp?.titleLabel || 'Entry Title / Reference'}
+            </label>
+            <input
+              type="text"
+              required
+              value={recTitle}
+              onChange={(e) => setRecTitle(e.target.value)}
+              placeholder={
+                accountTier === 'user'
+                  ? `Submit ${module.name} request or order...`
+                  : bp?.titlePlaceholder || hint?.titlePlaceholder || `New ${module.name} title or reference...`
+              }
+              className="w-full rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-900 focus:border-teal-600 focus:bg-white focus:outline-none dark:border-slate-700 dark:bg-slate-800 dark:text-slate-100"
+            />
+          </div>
+          <div className="sm:col-span-5">
+            <label className="mb-1 block text-[11px] font-medium text-slate-600 dark:text-slate-400">
+              Operational Notes / Details
+            </label>
+            <input
+              type="text"
+              value={recSubtitle}
+              onChange={(e) => setRecSubtitle(e.target.value)}
+              placeholder={bp?.subtitlePlaceholder || hint?.subtitlePlaceholder || 'Notes, supplier, customer, or route details...'}
+              className="w-full rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-900 focus:border-teal-600 focus:bg-white focus:outline-none dark:border-slate-700 dark:bg-slate-800 dark:text-slate-100"
+            />
+          </div>
+          <div className="sm:col-span-2">
+            <label className="mb-1 block text-[11px] font-medium text-slate-600 dark:text-slate-400">
+              {bp?.amountLabel || `Value (${business.currency})`}
+            </label>
+            <input
+              type="number"
+              value={recAmount}
+              onChange={(e) => setRecAmount(e.target.value)}
+              placeholder={business.currency}
+              className="w-full rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 font-mono text-xs text-slate-900 focus:border-teal-600 focus:bg-white focus:outline-none dark:border-slate-700 dark:bg-slate-800 dark:text-slate-100"
+            />
+          </div>
+        </div>
+
+        {/* Dynamic Domain Metadata Fields */}
+        {bp && bp.fields.length > 0 && accountTier !== 'user' && (
+          <div className="grid grid-cols-1 gap-3 border-t border-slate-100 pt-3 sm:grid-cols-2 lg:grid-cols-3 dark:border-slate-800">
+            {bp.fields.map((field) => {
+              const currentVal = recMeta[field.key] ?? '';
+              return (
+                <div key={field.key}>
+                  <label className="mb-1 block text-[11px] font-medium text-slate-600 dark:text-slate-400">
+                    {field.label}
+                  </label>
+                  {field.type === 'select' ? (
+                    <select
+                      value={String(currentVal)}
+                      onChange={(e) => handleMetaFieldChange(field.key, e.target.value)}
+                      className="w-full rounded-lg border border-slate-200 bg-slate-50 px-2.5 py-2 text-xs text-slate-900 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-100"
+                    >
+                      <option value="">Select {field.label}...</option>
+                      {(field.options || []).map((opt) => (
+                        <option key={opt} value={opt}>
+                          {opt}
+                        </option>
+                      ))}
+                    </select>
+                  ) : field.type === 'product_select' ? (
+                    <select
+                      value={String(currentVal)}
+                      onChange={(e) => handleMetaFieldChange(field.key, e.target.value)}
+                      className="w-full rounded-lg border border-slate-200 bg-slate-50 px-2.5 py-2 text-xs text-slate-900 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-100"
+                    >
+                      <option value="">Select inventory SKU...</option>
+                      {products.map((p) => (
+                        <option key={p.id} value={p.id}>
+                          {p.name} ({p.sku} · Stock: {p.stockByStore[activeStore.id] ?? 0})
+                        </option>
+                      ))}
+                    </select>
+                  ) : field.type === 'employee_select' ? (
+                    <select
+                      value={String(currentVal)}
+                      onChange={(e) => handleMetaFieldChange(field.key, e.target.value)}
+                      className="w-full rounded-lg border border-slate-200 bg-slate-50 px-2.5 py-2 text-xs text-slate-900 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-100"
+                    >
+                      <option value="">Assign employee...</option>
+                      {employees.map((emp) => (
+                        <option key={emp.id} value={emp.name}>
+                          {emp.name} ({emp.role})
+                        </option>
+                      ))}
+                    </select>
+                  ) : field.type === 'slot_select' ? (
+                    <select
+                      value={String(currentVal)}
+                      onChange={(e) => handleMetaFieldChange(field.key, e.target.value)}
+                      className="w-full rounded-lg border border-slate-200 bg-slate-50 px-2.5 py-2 text-xs text-slate-900 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-100"
+                    >
+                      <option value="">Select Table / Zone...</option>
+                      {allShelfSlots.map((sl) => (
+                        <option key={sl.slotId} value={`${sl.code} · ${sl.label}`}>
+                          {sl.code} · {sl.label} ({sl.zoneName})
+                        </option>
+                      ))}
+                    </select>
+                  ) : (
+                    <input
+                      type={field.type}
+                      value={String(currentVal)}
+                      onChange={(e) =>
+                        handleMetaFieldChange(
+                          field.key,
+                          field.type === 'number' ? Number(e.target.value) : e.target.value
+                        )
+                      }
+                      placeholder={field.placeholder || ''}
+                      className="w-full rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-900 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-100"
+                    />
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        )}
+
+        <div className="flex flex-wrap items-center justify-between gap-2 pt-1">
+          {accountTier !== 'user' ? (
+            <div className="flex items-center gap-2 text-xs text-slate-500">
+              <span>Initial Status:</span>
+              <select
+                aria-label="Default new record status"
+                value={workflowStatuses.includes(recStatus) ? recStatus : workflowStatuses[0]}
+                onChange={(e) => setRecStatus(e.target.value)}
+                className="rounded-lg border border-slate-200 bg-slate-50 px-2.5 py-1.5 text-xs text-slate-700 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-200"
+              >
+                {workflowStatuses.map((s) => (
+                  <option key={s} value={s}>
+                    {s}
+                  </option>
+                ))}
+              </select>
+            </div>
+          ) : (
+            <span className="text-xs text-slate-500">Submitted directly to store operations</span>
+          )}
+
+          <button
+            type="submit"
+            className="inline-flex items-center justify-center gap-1.5 rounded-lg bg-teal-700 px-4 py-2 text-xs font-semibold text-white hover:bg-teal-800 whitespace-nowrap dark:bg-teal-600"
+          >
+            <Plus className="h-3.5 w-3.5" />
+            <span>{accountTier === 'user' ? 'Submit Request' : `Add ${module.name} Record`}</span>
+          </button>
+        </div>
       </form>
 
       {/* Module Records Ledger */}
       <section className="rounded-xl border border-slate-200 bg-white dark:border-slate-800 dark:bg-slate-900">
-        <div className="flex items-center justify-between border-b border-slate-200 px-5 py-3.5 dark:border-slate-800">
-          <h2 className="font-display text-sm font-semibold text-slate-900 dark:text-slate-100">
-            {module.name} Records ({moduleRecords.length})
-          </h2>
-          {accountTier !== 'user' && (
-            <select
-              aria-label="Default new record status"
-              value={recStatus}
-              onChange={(e) => setRecStatus(e.target.value)}
-              className="rounded border border-slate-200 bg-slate-50 px-2 py-1 text-xs text-slate-700 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-200"
-            >
-              <option value="Active">Status: Active</option>
-              <option value="Approved">Status: Approved</option>
-              <option value="Pending Review">Status: Pending Review</option>
-              <option value="Completed">Status: Completed</option>
-            </select>
-          )}
+        <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-200 px-5 py-3.5 dark:border-slate-800">
+          <div className="flex flex-wrap items-center gap-2">
+            <h2 className="font-display text-sm font-semibold text-slate-900 dark:text-slate-100">
+              {module.name} Ledger ({filteredModuleRecords.length})
+            </h2>
+            <div className="flex flex-wrap gap-1">
+              {distinctStatuses.map((st) => (
+                <button
+                  key={st}
+                  type="button"
+                  onClick={() => setRecFilterStatus(st)}
+                  className={`rounded-md px-2 py-0.5 text-[11px] font-medium ${
+                    recFilterStatus === st
+                      ? 'bg-slate-900 text-white dark:bg-teal-600'
+                      : 'bg-slate-100 text-slate-600 hover:bg-slate-200 dark:bg-slate-800 dark:text-slate-300'
+                  }`}
+                >
+                  {st}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          <div className="relative min-w-[200px]">
+            <Search className="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-slate-400" />
+            <input
+              type="text"
+              value={recSearch}
+              onChange={(e) => setRecSearch(e.target.value)}
+              placeholder={`Search ${module.name.toLowerCase()}...`}
+              className="w-full rounded-lg border border-slate-200 bg-slate-50 py-1.5 pl-8 pr-3 text-xs dark:border-slate-700 dark:bg-slate-800"
+            />
+          </div>
         </div>
 
-        {moduleRecords.length === 0 ? (
+        {filteredModuleRecords.length === 0 ? (
           <div className="p-10 text-center">
             <p className="text-sm font-medium text-slate-800 dark:text-slate-200">
-              No {module.name} records logged yet for {business.name}
+              No {module.name} records matching filter for {business.name}
             </p>
             <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">
-              Use the quick-entry form above to create your first {module.name} transaction or workflow item.
+              Use the entry form or Quick Template button above to create your first {module.name} record.
             </p>
           </div>
         ) : (
           <div className="divide-y divide-slate-100 dark:divide-slate-800">
-            {moduleRecords.map((rec) => (
-              <div
-                key={rec.id}
-                className="flex flex-wrap items-center justify-between gap-3 px-5 py-3.5 text-xs hover:bg-slate-50 dark:hover:bg-slate-800/40"
-              >
-                <div>
-                  <p className="font-semibold text-slate-900 dark:text-slate-100">{rec.title}</p>
-                  <p className="mt-0.5 text-slate-500 dark:text-slate-400">
-                    {rec.subtitle} · {rec.date}
-                  </p>
-                </div>
-                <div className="flex items-center gap-3 text-right">
-                  <div>
-                    {rec.amount !== undefined && (
-                      <p className="font-mono font-semibold tabular-nums text-slate-900 dark:text-slate-100">
-                        {formatMoney(rec.amount, rec.currency || business.currency)}
+            {filteredModuleRecords.map((rec) => {
+              const metaEntries = Object.entries(rec.meta || {}).filter(
+                ([, val]) => val !== '' && val !== undefined && val !== null
+              );
+              const linkedProduct =
+                typeof rec.meta?.productId === 'string'
+                  ? products.find((p) => p.id === rec.meta.productId)
+                  : undefined;
+
+              return (
+                <div
+                  key={rec.id}
+                  className="flex flex-wrap items-center justify-between gap-3 px-5 py-3.5 text-xs hover:bg-slate-50 dark:hover:bg-slate-800/40"
+                >
+                  <div className="min-w-0 flex-1">
+                    <p className="font-semibold text-slate-900 dark:text-slate-100">{rec.title}</p>
+                    <p className="mt-0.5 text-slate-500 dark:text-slate-400">
+                      {rec.subtitle} · {rec.date}
+                    </p>
+                    {metaEntries.length > 0 && (
+                      <p className="mt-1 font-mono text-[11px] text-slate-600 dark:text-slate-400">
+                        {metaEntries
+                          .map(([k, v]) => {
+                            if (k === 'productId' && linkedProduct) {
+                              return `SKU: ${linkedProduct.name}`;
+                            }
+                            const label =
+                              bp?.fields.find((f) => f.key === k)?.label ||
+                              k.replace(/([A-Z])/g, ' $1');
+                            return `${label}: ${v}`;
+                          })
+                          .join(' · ')}
                       </p>
                     )}
-                    <p className="text-[11px] font-medium text-teal-700 dark:text-teal-400">
-                      {rec.status}
-                    </p>
                   </div>
-                  {module.id === 'purchase' &&
-                    rec.status !== 'Received (GRN)' &&
-                    perms.canEditInventory && (
+                  <div className="flex flex-wrap items-center gap-2.5 text-right">
+                    <div>
+                      {rec.amount !== undefined && (
+                        <p className="font-mono font-semibold tabular-nums text-slate-900 dark:text-slate-100">
+                          {['knowledge', 'forum', 'elearning', 'blog'].includes(module.id)
+                            ? `${rec.amount}`
+                            : formatMoney(rec.amount, rec.currency || business.currency)}
+                        </p>
+                      )}
+                      <p className="text-[11px] font-medium text-teal-700 dark:text-teal-400">
+                        {rec.status}
+                      </p>
+                    </div>
+
+                    {accountTier !== 'user' && onUpdateRecord && (
+                      <select
+                        aria-label={`Change status for ${rec.title}`}
+                        value={rec.status}
+                        onChange={(e) => onUpdateRecord(rec.id, { status: e.target.value })}
+                        className="rounded-lg border border-slate-200 bg-white px-2 py-1 text-[11px] font-medium text-slate-700 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-200"
+                      >
+                        {Array.from(new Set([...workflowStatuses, rec.status])).map((st) => (
+                          <option key={st} value={st}>
+                            {st}
+                          </option>
+                        ))}
+                      </select>
+                    )}
+
+                    {accountTier !== 'user' &&
+                      onUpdateRecord &&
+                      bp?.quickAdvanceLabel &&
+                      bp?.quickAdvanceToStatus &&
+                      rec.status !== bp.quickAdvanceToStatus && (
+                        <button
+                          type="button"
+                          onClick={() =>
+                            onUpdateRecord(rec.id, { status: bp.quickAdvanceToStatus })
+                          }
+                          className="rounded-lg border border-teal-200 bg-teal-50 px-2.5 py-1.5 text-[11px] font-semibold text-teal-800 hover:bg-teal-100 whitespace-nowrap dark:border-teal-800 dark:bg-teal-950/50 dark:text-teal-300"
+                        >
+                          {bp.quickAdvanceLabel}
+                        </button>
+                      )}
+
+                    {module.id === 'purchase' &&
+                      rec.status !== 'Received (GRN)' &&
+                      perms.canEditInventory && (
+                        <button
+                          type="button"
+                          onClick={() => handleReceiveGrn(rec.id)}
+                          disabled={receivingId === rec.id}
+                          className="inline-flex items-center gap-1 rounded-lg bg-slate-900 px-3 py-1.5 text-[11px] font-semibold text-white hover:bg-slate-800 disabled:opacity-50 dark:bg-teal-600"
+                        >
+                          <PackageCheck className="h-3.5 w-3.5" />
+                          <span>
+                            {receivingId === rec.id ? 'Receiving...' : 'Receive Stock (GRN)'}
+                          </span>
+                        </button>
+                      )}
+
+                    {accountTier !== 'user' && onDeleteRecord && (
                       <button
                         type="button"
-                        onClick={() => handleReceiveGrn(rec.id)}
-                        disabled={receivingId === rec.id}
-                        className="inline-flex items-center gap-1 rounded-lg bg-slate-900 px-3 py-1.5 text-[11px] font-semibold text-white hover:bg-slate-800 disabled:opacity-50 dark:bg-teal-600"
+                        onClick={() => onDeleteRecord(rec.id)}
+                        aria-label="Delete record"
+                        className="rounded p-1.5 text-rose-600 hover:bg-rose-50 dark:hover:bg-rose-950/40"
                       >
-                        <PackageCheck className="h-3.5 w-3.5" />
-                        <span>
-                          {receivingId === rec.id ? 'Receiving...' : 'Receive Stock (GRN)'}
-                        </span>
+                        <Trash2 className="h-3.5 w-3.5" />
                       </button>
                     )}
+                  </div>
                 </div>
-              </div>
-            ))}
+              );
+            })}
           </div>
         )}
       </section>
